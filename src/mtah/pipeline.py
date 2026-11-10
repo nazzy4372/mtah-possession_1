@@ -19,6 +19,21 @@ from mtah.spec import GameSpec
 VALID_LABELS = ("H", "A", "D", "X")
 
 
+class KickoffInconsistent(RuntimeError):
+    """A detected kickoff disagrees with the published boundaries or anchors: no file is written.
+    The message carries the per-half summary and aggregate diagnostics only."""
+
+    def __init__(self, kickoffs, fps):
+        self.kickoffs = kickoffs
+        lines = ["kickoff detection is inconsistent with the published bounds; no file written"]
+        for kickoff in kickoffs:
+            lines.append("  " + kickoff.describe(fps))
+            for window, values in kickoff.diagnostics.items():
+                lines.append("    diag {:<9} {}".format(window, "  ".join(
+                    "{}={}".format(k, v) for k, v in values.items())))
+        super().__init__("\n".join(lines))
+
+
 @dataclass
 class RunResult:
     labels: np.ndarray
@@ -35,6 +50,8 @@ def run(data_dir, spec: GameSpec) -> RunResult:
     t1 = time.perf_counter()
     raw = baseline_port.placeholder_labels(tracking)
     kickoffs = halves.detect_kickoffs(tracking, spec)
+    if not all(k.consistent for k in kickoffs):
+        raise KickoffInconsistent(kickoffs, spec.fps)
     labels = halves.apply_policy(raw, spec, kickoffs)
     timings["label_s"] = time.perf_counter() - t1
 

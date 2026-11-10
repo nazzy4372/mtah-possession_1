@@ -32,10 +32,17 @@ class GameSpec:
     fps: int
     pitch: Tuple[float, float]      # (length, width) in metres
     halves: Tuple[Tuple[int, int, int], ...]   # ((half, first_video_frame, last_video_frame), ...)
+    # Published kickoff anchors ((half, video_frame), ...), used ONLY to check the detected
+    # kickoff (CLAUDE.md rule 7), never to set a label. Empty when a game publishes none.
+    kickoff_anchors: Tuple[Tuple[int, int], ...] = ()
 
     @classmethod
     def from_upstream(cls, game: str = "BAR-ATH") -> "GameSpec":
         entry = games.GAMES[game]
+        anchors = []
+        for half, key in ((1, "kickoff"), (2, "kickoff_2nd")):
+            if key in entry:
+                anchors.append((half, int(games.anchor_video_frame(entry[key]))))
         return cls(
             name=game,
             stem=games.SOURCES["tactical"]["stem"],
@@ -43,6 +50,7 @@ class GameSpec:
             fps=int(entry["fps"]),
             pitch=tuple(float(v) for v in entry["pitch"]),
             halves=tuple((int(h), int(a), int(b)) for h, a, b in games.half_video_blocks(game)),
+            kickoff_anchors=tuple(anchors),
         )
 
     @classmethod
@@ -50,7 +58,9 @@ class GameSpec:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(name=data["name"], stem=data["stem"], n_frames=int(data["n_frames"]),
                    fps=int(data["fps"]), pitch=tuple(float(v) for v in data["pitch"]),
-                   halves=tuple(tuple(int(v) for v in h) for h in data["halves"]))
+                   halves=tuple(tuple(int(v) for v in h) for h in data["halves"]),
+                   kickoff_anchors=tuple(tuple(int(v) for v in a)
+                                         for a in data.get("kickoff_anchors", ())))
 
     def save(self, path) -> None:
         text = json.dumps(asdict(self), indent=2, sort_keys=True) + "\n"

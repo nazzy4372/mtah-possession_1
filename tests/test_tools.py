@@ -38,10 +38,10 @@ def test_parity_tool(small_bundle):
 
 def test_kickoff_diag_tool(small_bundle):
     proc = run_tool(TOOLS / "kickoff_diag.py", "--data-dir", small_bundle.path,
-                    "--spec", small_bundle.path / "game_spec.json")
+                    "--spec", small_bundle.path / "game_spec.json", "--runs")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert proc.stdout.count("kickoff detected by ball+shape") == 2
-    assert "longest_run_shape_ok" in proc.stdout
+    assert proc.stdout.count("kickoff detected by formation+ball") == 2
+    assert "longest_run_formation_ok" in proc.stdout and "ended=violated" in proc.stdout
 
 
 def test_report_tool(small_bundle, tmp_path):

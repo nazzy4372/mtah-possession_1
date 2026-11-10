@@ -50,7 +50,12 @@ def cmd_submission(args):
         return 2
     spec = _spec(args.spec)
     started = time.perf_counter()
-    result = pipeline.run(data_dir, spec)
+    try:
+        result = pipeline.run(data_dir, spec)
+    except pipeline.KickoffInconsistent as error:
+        print("FAILED  {}".format(error))
+        print("Run tools/kickoff_diag.py for the full aggregate breakdown.")
+        return 1
     digest = pipeline.write_submission(args.out, result.labels)
     elapsed = time.perf_counter() - started
 

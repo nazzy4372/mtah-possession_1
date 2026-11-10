@@ -68,10 +68,11 @@ def preset(name: str) -> Tuple[GameSpec, List[HalfPlan]]:
     if name == "full":
         spec = GameSpec.from_upstream("BAR-ATH")
         (h1, a1, b1), (h2, a2, b2) = spec.halves
-        # Synthetic kickoff offsets, chosen for the test: half 1 is graded from its kickoff, half 2
-        # kicks off 80 s into its block.
+        # Half 1 is graded from its kickoff. Half 2 kicks off at the published anchor, so this
+        # bundle also passes the pipeline's anchor check (the anchor sets no label anywhere).
+        k2 = dict(spec.kickoff_anchors)[h2]
         plans = [HalfPlan(h1, a1, b1, kickoff=a1, kick_team=0, sim_frames=180 * FPS),
-                 HalfPlan(h2, a2, b2, kickoff=a2 + 80 * FPS, kick_team=1, sim_frames=180 * FPS)]
+                 HalfPlan(h2, a2, b2, kickoff=k2, kick_team=1, sim_frames=180 * FPS)]
         return spec, plans
     raise ValueError("unknown preset {!r}".format(name))
 
@@ -134,10 +135,16 @@ def simulate_half(plan: HalfPlan, rng: np.random.Generator) -> HalfSim:
     # player motion: anchors + possession push + AR(1) drift
     anchors = np.concatenate([_anchors(0, plan.half), _anchors(1, plan.half)])   # (22, 2)
     direction = np.array([1.0 if (k < 11) == (plan.half == 1) else -1.0 for k in range(22)])
+    # During a stoppage the teams keep the shape of the last possession; they do not walk back
+    # into kickoff formation (which real teams only do for a kickoff).
+    shape_team = in_poss.copy()
+    for i in range(n_pre + 1, m):
+        if shape_team[i] < 0:
+            shape_team[i] = shape_team[i - 1]
     push_raw = np.zeros((m, 22))
     for k in range(22):
         own = 0 if k < 11 else 1
-        push_raw[:, k] = np.where(in_poss == own, 20.0, np.where(in_poss >= 0, -3.0, 0.0))
+        push_raw[:, k] = np.where(shape_team == own, 20.0, np.where(shape_team >= 0, -3.0, 0.0))
     push = lfilter([0.05], [1.0, -0.95], push_raw, axis=0)
     drift = lfilter([1.0], [1.0, -0.98], rng.normal(0.0, 0.08, size=(m, 22, 2)), axis=0)
     drift[:n_pre] *= 0.2                          # standing still-ish before kickoff

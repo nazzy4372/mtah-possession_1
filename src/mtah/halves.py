@@ -2,58 +2,73 @@
 
 The published half blocks say which frames are graded, but not when the ball is first kicked. For
 BAR-ATH the second half is graded about two minutes before its kickoff, and every frame in between
-is dead ball. That kickoff is found here from the tracking alone, never hard-coded.
+is dead ball. The kickoff is found here from the tracking alone and is never hard-coded.
 
-Methods are tried in order. The first that finds something inside the search window
-``[block_start - LEAD_S, block_start + SEARCH_S]`` wins:
+The signal is the kickoff FORMATION, not the ball. On the real match the ball is almost never
+tracked while it rests on the centre spot; it is picked up once it moves. The players, though, stand
+in their own halves before every kickoff and leave them within about a second of it. In open play
+both teams almost never stand fully in their own halves for seconds at a time.
 
-1. ``ball+shape``: the ball rests on the centre spot (all positions within ``MOVE_M`` of their
-   median for ``MIN_REST_S``, inside ``CENTRE_RADIUS_M`` of the spot) while the teams stand in
-   their own halves on at least half of the preceding ``SHAPE_LOOKBACK_S``. The kickoff is the
-   frame after the last frame the ball was seen at rest.
-2. ``ball``: the same rest on the spot, without the shape condition.
-3. ``shape`` (HYPOTHESIS): the end of a run of at least ``MIN_SHAPE_S`` in kickoff formation.
-4. ``data-start``: tracking begins within 1 s of the block start after at least
-   ``DATA_START_S`` with none, and any formation run that starts with the data ends within
-   ``DATA_START_MAX_SHAPE_S``. The half then starts with the data. This is the case for a first
-   half that is graded from its own kickoff, with no tracked rest before it. A longer formation
-   run from the start of the data is a line-up before the kickoff, so (3) handles it.
-5. ``fallback``: nothing found. The published block start is used, the result is flagged loudly,
-   and aggregate diagnostics are attached. It never raises, so a submission is still produced.
+Per frame, the formation is in one of three states:
+  OK        both teams have >= MIN_PLAYERS tracked, >= OWN_HALF_SHARE of each (ignoring the kicker
+            area and anyone within HALFWAY_TOL_M of the halfway line) in its own half, and the
+            two teams on opposite sides;
+  VIOLATED  both teams tracked well enough, and the condition fails;
+  UNKNOWN   a team has too few tracked players to tell. This is common around a restart, while the
+            camera or the tracker has not caught up. It never ends a formation by itself.
 
-A detected frame that falls outside the search window raises ``KickoffNotFound``. That is the
-consistency assertion against the published boundaries.
+A formation run starts at an OK frame and ends at the first VIOLATED frame that is followed by
+VIOLATION_S with no OK frame. Short flickers and UNKNOWN stretches do not end it. The kickoff is
+the end of the pre-kickoff line-up: the first run of at least MIN_FORMATION_S in the search window.
+Its end is the first frame the formation has broken.
 
-Thresholds are deliberately loose about position noise. The real ball track jitters by about 0.1 m
-a frame, and players standing on the halfway line can be measured on either side of it.
+Refinement with the ball, inside the REFINE_S before the formation breaks:
+  * a rest on the spot (the ball stays within MOVE_M of its median for MIN_REST_S, within
+    CENTRE_RADIUS_M of the spot): the kickoff is the frame after the ball was last seen at rest;
+  * else the first frame the ball is seen within NEAR_SPOT_M of the spot;
+  * else the break itself.
+
+Special cases:
+  data-start  tracking begins within 1 s of the block start after DATA_START_S with none, and the
+              formation is already in place and breaks within DATA_START_MAX_S. The data began at
+              the kickoff (a first half graded from its own kickoff).
+  fallback    nothing found: the published block start, flagged, with aggregate diagnostics.
+
+Consistency (the assertion of rule 7): the kickoff must lie inside the search window. When the game
+publishes kickoff anchors (BAR-ATH's games.py does), it must also lie within ANCHOR_TOL_S of the
+anchor. The anchor checks the detector and never sets a label. A kickoff that fails the check is
+marked inconsistent, and pipeline.run refuses to write a file.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
-CENTRE_RADIUS_M = 3.0       # ball "on the spot" (calibration and jitter tolerance)
-MOVE_M = 0.75               # ball "at rest": stays within this of its own median
-MIN_REST_S = 0.5
-MAX_HELD_GAP = 5            # frames of missing ball bridged while it rests
-SHAPE_LOOKBACK_S = 2.0
-MIN_SHAPE_S = 2.0
-MIN_PLAYERS = 6             # per team
+# formation
+MIN_PLAYERS = 6             # per team, below this the formation is UNKNOWN
 OWN_HALF_SHARE = 0.8
 HALFWAY_TOL_M = 1.0         # within this of the halfway line counts as either half
 KICKER_EXEMPT_M = 3.0
+VIOLATION_S = 0.5           # a violation must last this long (no OK frame) to end a run
+MIN_FORMATION_S = 2.0
+# ball refinement
+REFINE_S = 3.0
+CENTRE_RADIUS_M = 3.0
+NEAR_SPOT_M = 5.0
+MOVE_M = 0.75
+MIN_REST_S = 0.5
+MAX_HELD_GAP = 5
+# windows and checks
 LEAD_S = 10.0               # a first half is graded from its kickoff, so look slightly before
-SEARCH_S = 300.0            # kickoffs happen within 5 minutes of the published block start
-DATA_START_S = 2.0          # 'no tracking just before the block' means none in this many s
-DATA_START_MAX_SHAPE_S = 5.0  # a formation that starts with the data and ends sooner = kickoff
+SEARCH_S = 300.0
+DATA_START_S = 2.0
+DATA_START_MAX_S = 5.0
+ANCHOR_TOL_S = 2.0
 
+OK, VIOLATED, UNKNOWN = 1, -1, 0
 LABEL_X, LABEL_D = "X", "D"
-DETECTED = ("ball+shape", "ball", "shape", "data-start")
-
-
-class KickoffNotFound(RuntimeError):
-    pass
+DETECTED = ("formation+ball", "formation", "data-start")
 
 
 @dataclass(frozen=True)
@@ -63,6 +78,8 @@ class Kickoff:
     block_last: int
     frame: int
     method: str
+    consistent: bool = True
+    anchor_delta_s: Optional[float] = None
     diagnostics: Dict = field(default_factory=dict, compare=False)
 
     @property
@@ -71,12 +88,16 @@ class Kickoff:
 
     def describe(self, fps: int) -> str:
         offset = (self.frame - self.block_first) / float(fps)
-        if self.detected:
-            return ("half {}: kickoff detected by {} at {:+.2f} s from the published block "
-                    "start; consistent with published bounds: yes".format(
-                        self.half, self.method, offset))
-        return ("half {}: WARNING kickoff NOT DETECTED, using the published block start "
-                "(see diagnostics)".format(self.half))
+        if not self.detected:
+            head = "half {}: WARNING kickoff NOT DETECTED, using the published block start".format(
+                self.half)
+        else:
+            head = "half {}: kickoff detected by {} at {:+.2f} s from the published block " \
+                   "start".format(self.half, self.method, offset)
+        check = "; consistent with published bounds: {}".format("yes" if self.consistent else "NO")
+        if self.anchor_delta_s is not None:
+            check += " (published kickoff anchor {:+.2f} s away)".format(self.anchor_delta_s)
+        return head + check
 
 
 def _runs(mask: np.ndarray):
@@ -86,8 +107,7 @@ def _runs(mask: np.ndarray):
 
 
 def _longest(mask: np.ndarray) -> int:
-    runs = _runs(mask)
-    return max((b - a for a, b in runs), default=0)
+    return max((b - a for a, b in _runs(mask)), default=0)
 
 
 def _hold_short_gaps(ball: np.ndarray, observed: np.ndarray, max_gap: int) -> np.ndarray:
@@ -99,10 +119,9 @@ def _hold_short_gaps(ball: np.ndarray, observed: np.ndarray, max_gap: int) -> np
     return out
 
 
-def teams_separated(players_xy: np.ndarray, slot_team: np.ndarray, centre,
+def formation_state(players_xy: np.ndarray, slot_team: np.ndarray, centre,
                     share: float = OWN_HALF_SHARE) -> np.ndarray:
-    """Per frame: each team in its own half (kickoff formation), ignoring the kicker area and
-    players within HALFWAY_TOL_M of the halfway line."""
+    """Per frame OK / VIOLATED / UNKNOWN (see module docstring)."""
     cx, cy = centre
     x = players_xy[..., 0]
     y = players_xy[..., 1]
@@ -112,6 +131,7 @@ def teams_separated(players_xy: np.ndarray, slot_team: np.ndarray, centre,
     on_line = np.abs(dx) <= HALFWAY_TOL_M
     side = np.sign(dx)
 
+    known = np.ones(players_xy.shape[0], dtype=bool)
     ok = np.ones(players_xy.shape[0], dtype=bool)
     team_sides = []
     for team in (0, 1):
@@ -124,14 +144,40 @@ def teams_separated(players_xy: np.ndarray, slot_team: np.ndarray, centre,
         same = ((side[:, cols] == team_side[:, None]) | on_line[:, cols]) & counted
         n_counted = counted.sum(axis=1)
         frac = np.where(n_counted > 0, same.sum(axis=1) / np.maximum(n_counted, 1), 0.0)
-        ok &= (count >= MIN_PLAYERS) & (frac >= share) & (team_side != 0)
+        known &= count >= MIN_PLAYERS
+        ok &= (frac >= share) & (team_side != 0)
         team_sides.append(team_side)
     ok &= team_sides[0] == -team_sides[1]
-    return ok
+    return np.where(known, np.where(ok, OK, VIOLATED), UNKNOWN).astype(np.int8)
+
+
+def formation_runs(state: np.ndarray, fps: int):
+    """[(start, stop, how)] formation runs; stop is the first frame of a sustained violation, or
+    len(state) with how="open" if the run never breaks inside the window."""
+    sustain = max(1, int(round(VIOLATION_S * fps)))
+    is_ok = state == OK
+    # next_ok[i]: index of the first OK frame at or after i (len if none)
+    idx = np.where(is_ok, np.arange(len(state)), len(state))
+    next_ok = np.minimum.accumulate(idx[::-1])[::-1]
+    runs, i, n = [], 0, len(state)
+    while i < n:
+        if not is_ok[i]:
+            i = int(next_ok[i])
+            continue
+        start, j = i, i + 1
+        how = "open"
+        while j < n:
+            if state[j] == VIOLATED and next_ok[j] - j >= sustain:
+                how = "violated"
+                break
+            j += 1
+        runs.append((start, j, how))
+        i = j if how == "open" else int(next_ok[j]) if next_ok[j] < n else n
+    return runs
 
 
 def _rest_kicks(held: np.ndarray, observed: np.ndarray, centre, min_rest: int):
-    """Kick frames (window-relative) after each rest of the ball on the centre spot."""
+    """Window-relative frames right after each rest of the ball on the centre spot."""
     with np.errstate(invalid="ignore"):
         on_spot = np.hypot(held[:, 0] - centre[0], held[:, 1] - centre[1]) < CENTRE_RADIUS_M
     kicks = []
@@ -144,7 +190,7 @@ def _rest_kicks(held: np.ndarray, observed: np.ndarray, centre, min_rest: int):
                 j = i + min_rest
                 while j < stop and np.hypot(*(held[j] - anchor)) <= MOVE_M:
                     j += 1
-                if j < len(held):  # the ball did leave its rest inside the window
+                if j < len(held):
                     seen = np.flatnonzero(observed[i:j])
                     kicks.append(i + int(seen[-1]) + 1)
                 i = j
@@ -153,9 +199,44 @@ def _rest_kicks(held: np.ndarray, observed: np.ndarray, centre, min_rest: int):
     return kicks
 
 
+def _refine_with_ball(tracking, lo: int, brk: int, fps: int, centre):
+    """(frame, used_ball) for a formation break at absolute frame brk."""
+    a = max(lo, brk - int(round(REFINE_S * fps)))
+    if brk <= a:
+        return brk, False
+    observed = tracking.ball_observed[a:brk + 1]
+    held = _hold_short_gaps(tracking.ball_xy[a:brk + 1], observed, MAX_HELD_GAP)
+    kicks = [k for k in _rest_kicks(held, observed, centre, int(round(MIN_REST_S * fps)))
+             if a + k <= brk]
+    if kicks:
+        return a + kicks[-1], True
+    with np.errstate(invalid="ignore"):
+        dist = np.hypot(tracking.ball_xy[a:brk + 1, 0] - centre[0],
+                        tracking.ball_xy[a:brk + 1, 1] - centre[1])
+    near = np.flatnonzero(dist < NEAR_SPOT_M)
+    if len(near):
+        return a + int(near[0]), True
+    return brk, False
+
+
+def _data_begin_at_block(tracking, first: int, fps: int):
+    """The frame tracking begins, if within 1 s of the block start after DATA_START_S with none."""
+    tracked = tracking.player_observed.any(axis=1)
+    quiet = int(round(DATA_START_S * fps))
+    for t in range(max(0, first - fps), min(tracking.n_frames, first + fps + 1)):
+        if tracked[t]:
+            return t if t - quiet >= 0 and not tracked[t - quiet:t].any() else None
+    return None
+
+
+def _window(tracking, first: int, last: int, fps: int):
+    lo = max(0, first - int(round(LEAD_S * fps)))
+    hi = min(tracking.n_frames, last + 1, first + int(round(SEARCH_S * fps)) + 1)
+    return lo, hi
+
+
 def kickoff_diagnostics(tracking, first: int, fps: int) -> Dict:
-    """Aggregates only (counts and run lengths relative to the published block start), safe to
-    print for the real match. Explains why a method did or did not fire."""
+    """Aggregates only (counts and run lengths relative to the published block start)."""
     length, width = tracking.pitch
     centre = (length / 2.0, width / 2.0)
     lead, ten = int(round(LEAD_S * fps)), 10 * fps
@@ -166,88 +247,88 @@ def kickoff_diagnostics(tracking, first: int, fps: int) -> Dict:
         lo, hi = max(0, lo), min(tracking.n_frames, hi)
         players = tracking.players_xy[lo:hi]
         observed = ~np.isnan(players[..., 0])
-        ball_obs = tracking.ball_observed[lo:hi]
         ball = tracking.ball_xy[lo:hi]
         with np.errstate(invalid="ignore"):
             dist = np.hypot(ball[:, 0] - centre[0], ball[:, 1] - centre[1])
         per_team = [observed[:, tracking.slot_team == t].sum(axis=1) for t in (0, 1)]
+        state = formation_state(players, tracking.slot_team, centre)
         out[name] = {
             "frames": hi - lo,
             "frames_any_player": int(observed.any(axis=1).sum()),
             "mean_players_home": round(float(per_team[0].mean()), 2) if hi > lo else 0,
             "mean_players_away": round(float(per_team[1].mean()), 2) if hi > lo else 0,
-            "frames_ball_seen": int(ball_obs.sum()),
+            "frames_ball_seen": int(tracking.ball_observed[lo:hi].sum()),
             "frames_ball_within_3m_of_spot": int(np.sum(dist < 3.0)),
             "frames_ball_within_10m_of_spot": int(np.sum(dist < 10.0)),
-            "longest_run_ball_within_3m": _longest(dist < 3.0),
-            "frames_shape_ok": int(teams_separated(players, tracking.slot_team, centre).sum()),
-            "longest_run_shape_ok": _longest(teams_separated(players, tracking.slot_team, centre)),
-            "longest_run_shape_ok_at_0.6": _longest(
-                teams_separated(players, tracking.slot_team, centre, share=0.6)),
+            "frames_formation_ok": int(np.sum(state == OK)),
+            "frames_formation_violated": int(np.sum(state == VIOLATED)),
+            "frames_formation_unknown": int(np.sum(state == UNKNOWN)),
+            "longest_run_formation_ok": _longest(state == OK),
         }
     return out
 
 
-def detect_kickoff(tracking, half: int, first: int, last: int, fps: int) -> Kickoff:
+def formation_run_table(tracking, first: int, last: int, fps: int, min_s: float = 1.0):
+    """Formation runs of at least min_s in the search window, as offsets in seconds from the
+    published block start. Event timings, no positions; for tools/kickoff_diag.py --runs."""
+    length, width = tracking.pitch
+    lo, hi = _window(tracking, first, last, fps)
+    state = formation_state(tracking.players_xy[lo:hi], tracking.slot_team,
+                            (length / 2.0, width / 2.0))
+    rows = []
+    for start, stop, how in formation_runs(state, fps):
+        if stop - start >= min_s * fps:
+            seg = state[start:stop]
+            rows.append({"start_s": round((lo + start - first) / fps, 2),
+                         "end_s": round((lo + stop - first) / fps, 2),
+                         "length_s": round((stop - start) / fps, 2), "ended": how,
+                         "unknown_share": round(float(np.mean(seg == UNKNOWN)), 2)})
+    return rows
+
+
+def detect_kickoff(tracking, half: int, first: int, last: int, fps: int,
+                   anchor: Optional[int] = None) -> Kickoff:
     length, width = tracking.pitch
     centre = (length / 2.0, width / 2.0)
-    lo = max(0, first - int(round(LEAD_S * fps)))
-    hi = min(tracking.n_frames, last + 1, first + int(round(SEARCH_S * fps)) + 1)
+    lo, hi = _window(tracking, first, last, fps)
 
-    def found(rel_frame, method):
-        return _checked(Kickoff(half, first, last, lo + int(rel_frame), method), fps)
+    def result(frame, method):
+        return _checked(Kickoff(half, first, last, int(frame), method), fps, anchor)
 
     if hi - lo >= 2:
-        observed = tracking.ball_observed[lo:hi]
-        held = _hold_short_gaps(tracking.ball_xy[lo:hi], observed, MAX_HELD_GAP)
-        shape = teams_separated(tracking.players_xy[lo:hi], tracking.slot_team, centre)
-        kicks = _rest_kicks(held, observed, centre, int(round(MIN_REST_S * fps)))
-        lookback = int(round(SHAPE_LOOKBACK_S * fps))
-        for kick in kicks:
-            if shape[max(0, kick - lookback):kick].mean() >= 0.5:
-                return found(kick, "ball+shape")
-        if kicks:
-            return found(kicks[0], "ball")
+        state = formation_state(tracking.players_xy[lo:hi], tracking.slot_team, centre)
+        runs = [r for r in formation_runs(state, fps) if r[2] == "violated"]
         data_begin = _data_begin_at_block(tracking, first, fps)
-        shape_runs = _runs(shape)
-        if data_begin is not None:
-            # Formation in place when the data begins and gone within a few seconds: the data
-            # began at the kickoff. (No formation at data start is NOT evidence: in a second half
-            # tracking can resume while players are still walking out, minutes before kickoff.)
-            opening = [(a, b) for a, b in shape_runs if abs(lo + a - data_begin) <= fps // 2]
-            if opening and opening[0][1] - opening[0][0] < DATA_START_MAX_SHAPE_S * fps:
-                return _checked(Kickoff(half, first, last, first, "data-start"), fps)
-        min_shape = int(round(MIN_SHAPE_S * fps))
-        for start, stop in shape_runs:
-            if stop - start >= min_shape and stop < len(shape):
-                return found(stop, "shape")
 
-    return Kickoff(half, first, last, first, "fallback",
-                   diagnostics=kickoff_diagnostics(tracking, first, fps))
+        if data_begin is not None and runs and abs(lo + runs[0][0] - data_begin) <= fps // 2 \
+                and runs[0][1] - runs[0][0] < DATA_START_MAX_S * fps:
+            return result(first, "data-start")
+
+        min_run = int(round(MIN_FORMATION_S * fps))
+        lineup = next(((a, b) for a, b, _ in runs if b - a >= min_run), None)
+        if lineup is not None:
+            frame, used_ball = _refine_with_ball(tracking, lo, lo + lineup[1], fps, centre)
+            return result(frame, "formation+ball" if used_ball else "formation")
+
+    return _checked(Kickoff(half, first, last, first, "fallback",
+                            diagnostics=kickoff_diagnostics(tracking, first, fps)), fps, anchor)
 
 
-def _data_begin_at_block(tracking, first: int, fps: int):
-    """The frame tracking begins, if that is within 1 s of the block start after at least
-    DATA_START_S with none; else None."""
-    tracked = tracking.player_observed.any(axis=1)
-    quiet = int(round(DATA_START_S * fps))
-    for t in range(max(0, first - fps), min(tracking.n_frames, first + fps + 1)):
-        if tracked[t]:
-            return t if t - quiet >= 0 and not tracked[t - quiet:t].any() else None
-    return None
-
-
-def _checked(kickoff: Kickoff, fps: int) -> Kickoff:
+def _checked(kickoff: Kickoff, fps: int, anchor: Optional[int]) -> Kickoff:
     earliest = kickoff.block_first - int(round(LEAD_S * fps))
-    latest = kickoff.block_first + int(round(SEARCH_S * fps))
-    if not (earliest <= kickoff.frame <= latest and kickoff.frame <= kickoff.block_last):
-        raise KickoffNotFound("half {}: detected kickoff inconsistent with published bounds"
-                              .format(kickoff.half))
-    return kickoff
+    latest = min(kickoff.block_last, kickoff.block_first + int(round(SEARCH_S * fps)))
+    consistent = earliest <= kickoff.frame <= latest
+    delta = None
+    if anchor is not None:
+        delta = (kickoff.frame - anchor) / float(fps)
+        consistent = consistent and abs(delta) <= ANCHOR_TOL_S
+    return Kickoff(kickoff.half, kickoff.block_first, kickoff.block_last, kickoff.frame,
+                   kickoff.method, consistent, delta, kickoff.diagnostics)
 
 
 def detect_kickoffs(tracking, spec) -> List[Kickoff]:
-    return [detect_kickoff(tracking, half, first, last, spec.fps)
+    anchors = dict(spec.kickoff_anchors)
+    return [detect_kickoff(tracking, half, first, last, spec.fps, anchors.get(half))
             for half, first, last in spec.halves]
 
 
