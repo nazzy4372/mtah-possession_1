@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(//c/Hackathon/mtah-data/**)",
+      "Edit(//c/Hackathon/mtah-data/**)",
+      "Read(//c/Hackathon/more-than-a-hack-2027-main/data/**)",
+      "Read(./data/**)",
+      "Edit(./data/**)",
+      "Read(./outputs/real/**)",
+      "Read(**/*.mp4)",
+      "Read(**/*_atd.txt)",
+      "Read(**/*_atd.xml)",
+      "Read(**/*_homography.csv)",
+      "Read(**/*_smart_tagging.xml)"
+    ]
+  }
+}
