@@ -58,6 +58,9 @@ def cmd_submission(args):
     print("game        {}  ({} frames)".format(spec.name, spec.n_frames))
     for kickoff in result.kickoffs:
         print("kickoff     {}".format(kickoff.describe(spec.fps)))
+        for window, values in kickoff.diagnostics.items():
+            print("  diag {:<9} {}".format(window, "  ".join(
+                "{}={}".format(k, v) for k, v in values.items())))
     counts = pipeline.label_counts(result.labels)
     print("labels      " + "  ".join("{} {}".format(k, v) for k, v in counts.items()))
     print("timing      parse {:.1f} s, label {:.1f} s, total {:.1f} s".format(

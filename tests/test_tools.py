@@ -36,6 +36,14 @@ def test_parity_tool(small_bundle):
     assert "PARITY OK" in proc.stdout
 
 
+def test_kickoff_diag_tool(small_bundle):
+    proc = run_tool(TOOLS / "kickoff_diag.py", "--data-dir", small_bundle.path,
+                    "--spec", small_bundle.path / "game_spec.json")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.count("kickoff detected by ball+shape") == 2
+    assert "longest_run_shape_ok" in proc.stdout
+
+
 def test_report_tool(small_bundle, tmp_path):
     result = pipeline.run(small_bundle.path, small_bundle.spec)
     path = tmp_path / "sub.csv"

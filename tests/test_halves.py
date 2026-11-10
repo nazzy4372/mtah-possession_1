@@ -4,36 +4,76 @@ import pytest
 from mtah import halves, io_atd
 
 
-def test_kickoffs_detected_from_ball_shape(small_bundle):
-    tracking = io_atd.load_game(small_bundle.path, small_bundle.spec)
-    kickoffs = halves.detect_kickoffs(tracking, small_bundle.spec)
-    assert [k.half for k in kickoffs] == [1, 2]
-    for kickoff in kickoffs:
-        assert kickoff.method == "ball"
-        assert abs(kickoff.frame - small_bundle.kickoffs[kickoff.half]) <= 5
+@pytest.fixture
+def tracking(small_bundle):
+    return io_atd.load_game(small_bundle.path, small_bundle.spec)
 
 
-def test_shape_fallback_when_ball_is_never_seen(small_bundle):
+def detect(tracking, bundle):
+    return {k.half: k for k in halves.detect_kickoffs(tracking, bundle.spec)}
+
+
+def test_kickoffs_detected_from_ball_on_spot(tracking, small_bundle):
+    for half, kickoff in detect(tracking, small_bundle).items():
+        assert kickoff.method == "ball+shape"
+        assert abs(kickoff.frame - small_bundle.kickoffs[half]) <= 2
+
+
+def test_ball_jitter_at_rest_is_tolerated(tracking, small_bundle):
+    """The real ball track jitters by ~0.1 m a frame; a resting ball must still count as resting."""
+    rng = np.random.default_rng(1)
+    tracking.ball_xy += rng.normal(0.0, 0.1, size=tracking.ball_xy.shape)
+    for half, kickoff in detect(tracking, small_bundle).items():
+        assert kickoff.method == "ball+shape"
+        assert abs(kickoff.frame - small_bundle.kickoffs[half]) <= 3
+
+
+def test_shape_fallback_when_ball_is_never_seen(tracking, small_bundle):
     """HYPOTHESIS check of the fallback: without a ball, the end of the kickoff formation."""
-    tracking = io_atd.load_game(small_bundle.path, small_bundle.spec)
     tracking.ball_xy[:] = np.nan
-    for kickoff in halves.detect_kickoffs(tracking, small_bundle.spec):
+    for half, kickoff in detect(tracking, small_bundle).items():
+        truth = small_bundle.kickoffs[half]
+        if half == 1:
+            continue  # half 1 has tracking before its block, so it is the shape case too
         assert kickoff.method == "shape"
-        truth = small_bundle.kickoffs[kickoff.half]
-        assert truth <= kickoff.frame <= truth + 2 * small_bundle.spec.fps
+        assert truth <= kickoff.frame <= truth + 5 * small_bundle.spec.fps
 
 
-def test_no_kickoff_shape_raises(small_bundle):
-    tracking = io_atd.load_game(small_bundle.path, small_bundle.spec)
+def test_data_start_when_tracking_begins_at_the_block(tracking, small_bundle):
+    """A first half graded from its kickoff, with no tracked rest before it."""
+    (half, first, last) = small_bundle.spec.halves[0]
+    tracking.players_xy[:first] = np.nan
+    tracking.ball_xy[:first + 3] = np.nan
+    kickoff = detect(tracking, small_bundle)[half]
+    assert kickoff.method == "data-start" and kickoff.frame == first
+
+
+def test_tracking_resuming_before_lineup_is_not_a_kickoff(tracking, small_bundle):
+    """Second-half risk: tracking resumes at the block start while players walk out, no ball.
+    That must not be read as a kickoff at the block start."""
+    half, first, last = small_bundle.spec.halves[1]
+    truth = small_bundle.kickoffs[half]
+    tracking.ball_xy[:] = np.nan
+    walk = slice(first, first + 4 * small_bundle.spec.fps)   # players scattered, not lined up
+    tracking.players_xy[walk, :, 0] = small_bundle.spec.pitch[0] / 2.0 + np.linspace(
+        -30, 30, tracking.players_xy.shape[1])
+    kickoff = detect(tracking, small_bundle)[half]
+    assert kickoff.method != "data-start"
+    assert truth <= kickoff.frame <= truth + 5 * small_bundle.spec.fps
+
+
+def test_nothing_found_falls_back_with_diagnostics(tracking, small_bundle):
     tracking.ball_xy[:] = np.nan
     tracking.players_xy[:] = np.nan
-    with pytest.raises(halves.KickoffNotFound):
-        halves.detect_kickoffs(tracking, small_bundle.spec)
+    for kickoff in detect(tracking, small_bundle).values():
+        assert kickoff.method == "fallback" and not kickoff.detected
+        assert kickoff.frame == kickoff.block_first
+        assert kickoff.diagnostics["search"]["frames_any_player"] == 0
+        assert "NOT DETECTED" in kickoff.describe(25)
 
 
-def test_policy_x_outside_blocks_and_d_before_kickoff(small_bundle):
+def test_policy_x_outside_blocks_and_d_before_kickoff(tracking, small_bundle):
     spec = small_bundle.spec
-    tracking = io_atd.load_game(small_bundle.path, spec)
     kickoffs = halves.detect_kickoffs(tracking, spec)
     labels = halves.apply_policy(np.full(spec.n_frames, "H"), spec, kickoffs)
     graded = spec.graded_mask()

@@ -137,8 +137,8 @@ def simulate_half(plan: HalfPlan, rng: np.random.Generator) -> HalfSim:
     push_raw = np.zeros((m, 22))
     for k in range(22):
         own = 0 if k < 11 else 1
-        push_raw[:, k] = np.where(in_poss == own, 12.0, np.where(in_poss >= 0, -3.0, 0.0))
-    push = lfilter([0.02], [1.0, -0.98], push_raw, axis=0)
+        push_raw[:, k] = np.where(in_poss == own, 20.0, np.where(in_poss >= 0, -3.0, 0.0))
+    push = lfilter([0.05], [1.0, -0.95], push_raw, axis=0)
     drift = lfilter([1.0], [1.0, -0.98], rng.normal(0.0, 0.08, size=(m, 22, 2)), axis=0)
     drift[:n_pre] *= 0.2                          # standing still-ish before kickoff
     push[:n_pre] = 0.0
