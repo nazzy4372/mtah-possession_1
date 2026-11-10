@@ -32,6 +32,7 @@ All commands go through `tasks.py`:
 .venv\Scripts\python.exe tasks.py report               aggregate sanity numbers
 .venv\Scripts\python.exe tasks.py synthetic --preset full
 .venv\Scripts\python.exe tasks.py external --prepare     download (pinned) + convert + score external games
+.venv\Scripts\python.exe tools\feature_stats.py          label-free feature distributions (domain gap)
 ```
 
 `submission` writes `outputs\real\submission.csv` with LF line endings and prints its SHA-256. A

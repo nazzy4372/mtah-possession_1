@@ -74,7 +74,9 @@ def load_csv_game(game: int):
                "type": str(r["Type"]).strip().upper(),
                "subtypes": _split_subtypes(r["Subtype"]),
                "period": int(r["Period"]), "start": int(r["Start Frame"]),
-               "end": int(r["End Frame"])} for _, r in ev.iterrows()]
+               "end": int(r["End Frame"]),
+               "start_xy": (float(r["Start X"]), float(r["Start Y"])),
+               "end_xy": (float(r["End X"]), float(r["End Y"]))} for _, r in ev.iterrows()]
     return period, frame, players, ball, slot_team, events
 
 
@@ -108,11 +110,15 @@ def load_epts_game(game: int = 3):
         sub = e.get("subtypes")
         if isinstance(sub, dict):
             sub = [sub]
+        def xy(point):
+            return (float("nan") if point.get("x") is None else float(point["x"]),
+                    float("nan") if point.get("y") is None else float(point["y"]))
         events.append({"team": 0 if e["team"]["id"] == home.team_id else 1,
                        "type": e["type"]["name"].strip().upper(),
                        "subtypes": tuple(s["name"].strip().upper() for s in (sub or [])),
                        "period": int(e["period"]), "start": int(e["start"]["frame"]),
-                       "end": int(e["end"]["frame"])})
+                       "end": int(e["end"]["frame"]),
+                       "start_xy": xy(e["start"]), "end_xy": xy(e["end"])})
     return (df["period_id"].to_numpy(dtype=int), df["frame_id"].to_numpy(dtype=int), players,
             ball, slot_team, events)
 
@@ -174,6 +180,49 @@ def derive_labels(frames: np.ndarray, periods: np.ndarray, events) -> np.ndarray
     return labels
 
 
+OUT_PUSH_M = 1.5     # a ball that went out rests this far beyond the nearest line
+MAX_OUT_REST_S = 2.0
+
+
+def resting_ball_stretches(labels, frames, periods, events, video_index):
+    """[(start, stop, x_m, y_m, anchor)] video-frame stretches over which a dead ball rests.
+
+    For each dead run: "start" anchored at the point where the ball left the pitch (the end of a
+    BALL OUT or SHOT-OUT event), pushed OUT_PUSH_M beyond the nearest line, for up to
+    MAX_OUT_REST_S; and "end" anchored at the restart spot (the start of the restart event; the
+    centre spot for a kickoff). Used only by ext/augment.py to undo the source's blanking of the
+    dead ball. Positions come from the event data, never from the tracking."""
+    length, width = PITCH
+    out = []
+    for period in np.unique(periods):
+        rows = np.flatnonzero(periods == period)
+        seg = labels[rows]
+        dead = seg == "D"
+        edges = np.diff(np.concatenate(([0], dead.astype(np.int8), [0])))
+        for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)):
+            f_start, f_end = int(frames[rows[a]]), int(frames[rows[b - 1]]) + 1
+            v_start, v_end = int(video_index[rows[a]]), int(video_index[rows[b - 1]]) + 1
+            evs = [e for e in events if e["period"] == period]
+            outs = [e for e in evs if abs(e["end"] - f_start) <= 2 and _stop_frame(e) is not None
+                    and np.isfinite(e["end_xy"][0])]
+            if outs:
+                x, y = outs[0]["end_xy"][0] * length, outs[0]["end_xy"][1] * width
+                # push beyond the nearest line
+                dists = {"x0": x, "x1": length - x, "y0": y, "y1": width - y}
+                side = min(dists, key=dists.get)
+                x = -OUT_PUSH_M if side == "x0" else length + OUT_PUSH_M if side == "x1" else x
+                y = -OUT_PUSH_M if side == "y0" else width + OUT_PUSH_M if side == "y1" else y
+                stop = min(v_end, v_start + int(MAX_OUT_REST_S * FPS))
+                out.append((v_start, stop, float(x), float(y), "start"))
+            restarts = [e for e in evs if abs(e["start"] - f_end) <= 2 and _is_restart(e)]
+            if restarts:
+                sx, sy = restarts[0]["start_xy"]
+                if not np.isfinite(sx):
+                    sx, sy = 0.5, 0.5   # kickoff: the centre spot
+                out.append((v_start, v_end, float(sx * length), float(sy * width), "end"))
+    return out
+
+
 # -- conversion ----------------------------------------------------------------------------------
 
 def convert(game: int, out_root: Path = BUNDLES) -> Path:
@@ -216,8 +265,15 @@ def convert(game: int, out_root: Path = BUNDLES) -> Path:
     truth = {"source": "metrica-sports/sample-data Sample_Game_{}".format(game),
              "event_kickoffs_video_frame": kickoffs, "n_slots": int(players.shape[1]),
              "label_counts": {k: int(np.sum(gt == k)) for k in "HADX"}}
+    video_index = np.empty(len(frames), dtype=np.int64)
+    video_index[rows] = video_rows
+    rests = resting_ball_stretches(labels, frames, periods, events, video_index)
+    truth["n_resting_ball_stretches"] = len(rests)
     out = out_root / "metrica_g{}".format(game)
     atd_write.write_bundle(out, spec, vid_players, vid_ball, slot_team, gt, truth)
+    with open(out / "rests.json", "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(rests, handle)
+        handle.write("\n")
     return out
 
 

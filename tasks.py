@@ -8,9 +8,10 @@
     python tasks.py report [F] [--spec S]             aggregate sanity numbers for a submission
     python tasks.py synthetic [--out D] [--preset small|full] [--seed N]
                                                       write a synthetic bundle in ATD format
-    python tasks.py external [--games 1 2 3] [--prepare]
-                                                      download + convert external games (if
-                                                      needed) and score baseline vs v1
+    python tasks.py external [--prepare] [--games NAME ...]
+                                                      (--prepare: download + convert Metrica and
+                                                      SkillCorner) and score baseline vs v1 under
+                                                      clean / balldrop / full noise
     python tasks.py tune                              (M5) Optuna on external games
 
 --data-dir defaults to the MTAH_DATA_DIR environment variable. Output defaults to
@@ -116,16 +117,23 @@ def cmd_synthetic(args):
 
 def cmd_external(args):
     sys.path.insert(0, str(ROOT))
-    from ext import download, evaluate, metrica
+    from ext import download, evaluate, metrica, skillcorner
 
-    missing = [g for g in args.games
-               if not (metrica.BUNDLES / "metrica_g{}".format(g) / "gt.csv").is_file()]
-    if args.prepare or missing:
+    if args.prepare:
         download.download_metrica()
-        for g in (args.games if args.prepare else missing):
-            print("converting Metrica game {} ...".format(g))
-            metrica.convert(g)
-    return evaluate.main(["--games", *map(str, args.games), "--bootstrap", str(args.bootstrap)])
+        for g in (1, 2, 3):
+            if not (metrica.BUNDLES / "metrica_g{}".format(g) / "gt.csv").is_file():
+                print("converting Metrica game {} ...".format(g), flush=True)
+                metrica.convert(g)
+        download.download_skillcorner()
+        for match_id in skillcorner.downloaded_matches():
+            if not (skillcorner.BUNDLES / "sc_{}".format(match_id) / "gt.csv").is_file():
+                print("converting SkillCorner match {} ...".format(match_id), flush=True)
+                skillcorner.convert(match_id)
+    argv = ["--bootstrap", str(args.bootstrap)]
+    if args.games:
+        argv += ["--games", *args.games]
+    return evaluate.main(argv)
 
 
 def cmd_not_yet(milestone):
@@ -168,10 +176,11 @@ def main(argv=None):
     p.set_defaults(func=cmd_synthetic)
 
     p = sub.add_parser("external", help="download/convert external games, score methods")
-    p.add_argument("--games", nargs="+", type=int, default=[1, 2, 3])
+    p.add_argument("--games", nargs="+",
+                   help="bundle names, e.g. metrica_g3 sc_1874553 (default: every converted game)")
     p.add_argument("--bootstrap", type=int, default=200)
     p.add_argument("--prepare", action="store_true",
-                   help="download (pinned, SHA-256 checked) and convert the games first")
+                   help="download (pinned, SHA-256 checked) and convert Metrica + SkillCorner")
     p.set_defaults(func=cmd_external)
     sub.add_parser("tune", help="(M5)").set_defaults(func=cmd_not_yet("M5"))
 

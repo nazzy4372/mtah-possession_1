@@ -28,7 +28,7 @@ from mtah.spec import GameSpec  # noqa: E402
 
 BUNDLES = ROOT / "ext_cache" / "bundles"
 OUT = ROOT / "outputs" / "external"
-CONDITIONS = ("clean", "balldrop")
+CONDITIONS = ("clean", "balldrop", "full")
 
 
 def load(name):
@@ -38,10 +38,22 @@ def load(name):
     return path, spec, gt
 
 
+def load_rests(path):
+    rests_path = Path(path) / "rests.json"
+    if not rests_path.is_file():
+        return []
+    return [tuple(r) for r in json.loads(rests_path.read_text(encoding="utf-8"))]
+
+
 def tracking_for(path, spec, condition, seed):
+    """clean | balldrop (M2: ball dropout only) | full (M3: every real-calibrated corruption)."""
     tracking = io_atd.load_game(path, spec)
     if condition == "balldrop":
         augment.ball_dropout(tracking, seed=seed)
+    elif condition == "full":
+        tracking = augment.full(tracking, seed=seed, fps=spec.fps, rests=load_rests(path))
+    elif condition != "clean":
+        raise ValueError("unknown condition {!r}".format(condition))
     return tracking
 
 
@@ -93,26 +105,43 @@ def print_row(r):
 
 
 def summarise(rows):
-    print("\nmean over games")
-    for condition in sorted({r["condition"] for r in rows}):
-        for method in sorted({r["method"] for r in rows}):
-            sel = [r for r in rows if r["condition"] == condition and r["method"] == method]
-            if sel:
-                print("  {:<9} {:<9} spellF1 {:.4f}  macroF1 {:.4f}  poss/gt {:.2f}".format(
-                    condition, method, np.mean([r["spell_f1_mean"] for r in sel]),
-                    np.mean([r["macro_f1"] for r in sel]),
-                    np.mean([r["n_pred_spells"] / r["n_gt_spells"] for r in sel])))
+    """Mean per source, condition and method, with a bootstrap over games (seeded)."""
+    print("\nmean over games (5-95% bootstrap over games)")
+    rng = np.random.RandomState(0)
+    for source in ("metrica", "sc_", ""):
+        label = {"metrica": "Metrica", "sc_": "SkillCorner", "": "all"}[source]
+        for condition in [c for c in CONDITIONS if c in {r["condition"] for r in rows}]:
+            for method in sorted({r["method"] for r in rows}):
+                sel = [r for r in rows if r["condition"] == condition and r["method"] == method
+                       and r["game"].startswith(source)]
+                if not sel:
+                    continue
+                s = np.array([r["spell_f1_mean"] for r in sel])
+                boots = [s[rng.randint(0, len(s), len(s))].mean() for _ in range(1000)]
+                print("  {:<11} {:<9} {:<9} n={:<2} spellF1 {:.4f} ({:.3f}-{:.3f})  macroF1 {:.4f}"
+                      "  poss/gt {:.2f}".format(
+                          label, condition, method, len(sel), s.mean(),
+                          np.percentile(boots, 5), np.percentile(boots, 95),
+                          np.mean([r["macro_f1"] for r in sel]),
+                          np.mean([r["n_pred_spells"] / r["n_gt_spells"] for r in sel])))
+
+
+def available_games():
+    """Every converted external bundle, Metrica first, then SkillCorner, in a fixed order."""
+    names = sorted(p.name for p in BUNDLES.iterdir()
+                   if p.is_dir() and (p / "gt.csv").is_file()) if BUNDLES.is_dir() else []
+    return [n for n in names if n.startswith("metrica")] + [n for n in names if n.startswith("sc_")]
 
 
 def main(argv=None):
     import argparse
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--games", nargs="+", type=int, default=[1, 2, 3])
+    parser.add_argument("--games", nargs="+", help="bundle names (default: every converted game)")
     parser.add_argument("--bootstrap", type=int, default=200)
     parser.add_argument("--conditions", nargs="+", default=list(CONDITIONS))
     args = parser.parse_args(argv)
-    rows = evaluate(["metrica_g{}".format(g) for g in args.games], conditions=args.conditions,
-                    bootstrap=args.bootstrap)
+    games = args.games or available_games()
+    rows = evaluate(games, conditions=args.conditions, bootstrap=args.bootstrap)
     summarise(rows)
     OUT.mkdir(parents=True, exist_ok=True)
     with open(OUT / "results.json", "w", encoding="utf-8", newline="\n") as handle:
