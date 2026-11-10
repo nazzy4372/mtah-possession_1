@@ -1,0 +1,9 @@
+# Test configuration only. The project is not installed as a package: tasks.py and pytest put
+# src/ on the path, so a fresh clone runs with nothing but `pip install -r requirements.txt`.
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "slow: full-length (199,319-frame) synthetic match; deselect with `python tasks.py test --fast`",
+]

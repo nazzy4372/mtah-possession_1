@@ -2,11 +2,23 @@
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+.pytest_cache/
+
+# Match data and anything derived from it per frame. Never commit these (CLAUDE.md, hard rule 5).
 data/
+outputs/
 outputs/real/
 *.mp4
+*_atd.*
 *_atd.txt
 *_atd.xml
+*homography*.csv
 *_homography.csv
+*smart_tagging*.xml
 *_smart_tagging.xml
+# ...but *_atd.* above would also hide our own source (io_atd.py, test_io_atd.py).
+!*_atd.py
+
+# Downloaded external datasets (M3); the loaders re-fetch them.
+ext_cache/
 .env
