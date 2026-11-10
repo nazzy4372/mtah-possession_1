@@ -1,7 +1,12 @@
 """Fast parser for the raw ATD (Metrica FIFA/EPTS) tracking file and its metadata XML.
 
 Raw line:  ``<frame_id>:<x,y,s>;<x,y,s>;...;<x,y,s>:<x,y,s>`` (players, then the ball), with
-``NaN`` for a missing observation. x and y are normalised to 0-1; s is speed in **km/h**.
+``NaN`` for a missing observation. x and y are normalised to 0-1; s is speed in **m/s**.
+
+Speed unit: upstream DATA.md says m/s, and the real match agrees: the speed computed from player
+positions is the raw ``s`` value at every percentile (checked with tools/real_stats.py). The real
+ball's ``s`` is implausibly slow and mostly missing where it matters, so features compute ball speed
+from positions instead.
 ``video_frame = frame_id - 1``.
 
 Speed: replacing ``:`` and ``;`` with ``,`` turns every line into ``1 + 3*n_slots + 3`` plain
@@ -27,7 +32,7 @@ import numpy as np
 import pandas as pd
 
 HOME, AWAY = 0, 1
-KMH_TO_MS = 1.0 / 3.6
+SPEED_TO_MS = 1.0  # the s channel is already m/s (see module docstring)
 FIELDS_PER_OBJECT = 3  # x, y, s
 
 
@@ -212,13 +217,13 @@ def load(meta_path, raw_path, pitch: Tuple[float, float],
     players_xy = np.empty((n, k, 2), dtype=np.float64)
     players_xy[..., 0] = players[..., 0] * length
     players_xy[..., 1] = players[..., 1] * width
-    players_speed = players[..., 2] * KMH_TO_MS
+    players_speed = players[..., 2] * SPEED_TO_MS
 
     ball = values[:, 1 + FIELDS_PER_OBJECT * k:]
     ball_xy = np.empty((n, 2), dtype=np.float64)
     ball_xy[:, 0] = ball[:, 0] * length
     ball_xy[:, 1] = ball[:, 1] * width
-    ball_speed = ball[:, 2] * KMH_TO_MS
+    ball_speed = ball[:, 2] * SPEED_TO_MS
 
     return Tracking(players_xy=players_xy, players_speed=np.ascontiguousarray(players_speed),
                     ball_xy=ball_xy, ball_speed=np.ascontiguousarray(ball_speed),

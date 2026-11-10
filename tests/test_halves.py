@@ -86,12 +86,27 @@ def test_tracking_resuming_before_lineup_is_not_a_kickoff(tracking, small_bundle
     assert truth <= kickoff.frame <= truth + 3 * small_bundle.spec.fps
 
 
-def test_data_start_when_tracking_begins_at_the_block(tracking, small_bundle):
+def test_short_lineup_when_tracking_begins_at_the_block(tracking, small_bundle):
+    """Tracking starts mid line-up (external game 2): the line-up counts whatever its length."""
     half, first, last = small_bundle.spec.halves[0]
     tracking.players_xy[:first] = np.nan
     tracking.ball_xy[:first + 3] = np.nan
     kickoff = detect(tracking, small_bundle)[half]
-    assert kickoff.method == "data-start" and kickoff.frame == first
+    assert kickoff.method in ("formation", "formation+ball")
+    assert first <= kickoff.frame <= first + 2 * small_bundle.spec.fps
+
+
+def test_live_start_when_tracking_begins_after_the_kick(tracking, small_bundle):
+    """Tracking starts with play already live (external game 1): kickoff = block start."""
+    half, first, last = small_bundle.spec.halves[0]
+    fps = small_bundle.spec.fps
+    tracking.players_xy[:first] = np.nan
+    t = np.arange(4 * fps)[:, None]
+    run = tracking.players_xy[first:first + 4 * fps]
+    run[..., 0] = small_bundle.spec.pitch[0] / 2.0 + np.linspace(-20, 20, run.shape[1])  # mixed
+    run[..., 1] += 3.0 * t / fps                                                            # 3 m/s
+    kickoff = detect(tracking, small_bundle)[half]
+    assert kickoff.method == "live-start" and kickoff.frame == first
 
 
 def test_nothing_found_falls_back_with_diagnostics(tracking, small_bundle):

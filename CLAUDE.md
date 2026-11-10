@@ -68,7 +68,9 @@ Read, in order: README.md, CHALLENGE.md, DATA.md, EVALUATION.md, SUBMISSION.md, 
 - The ball is missing on 41% of graded frames, disproportionately in duels, crowded boxes and aerial
   balls. Design for it from day one.
 - **Schema confirmed (checked locally, names only):** the ATD XML declares exactly three channels,
-  `x` (normalised), `y` (normalised) and `s` (**speed in km/h, not m/s**; divide by 3.6). The ball
+  `x` (normalised), `y` (normalised) and `s` (**speed in m/s**, as upstream DATA.md says; an earlier
+  note here said km/h, but real_stats showed position-derived speed equals raw `s` at every
+  percentile. The ball's `s` is unreliable, so derive ball speed from positions). The ball
   and all 46 player slots each carry exactly those three fields. There is no ball-state or ownership
   channel, so alive/dead and team in possession must be inferred entirely. `tools/inspect_schema.py`
   stays in the repo as documentation.

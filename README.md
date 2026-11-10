@@ -5,8 +5,10 @@ the provided automatic tracking. The official challenge, scorer and starter code
 `upstream/` submodule ([metrica-sports/more-than-a-hack-2027](https://github.com/metrica-sports/more-than-a-hack-2027)),
 imported and never modified.
 
-Status: **M1, scaffolding.** The pipeline runs end to end with a placeholder labeller (the
-upstream baseline, ported). The real model arrives in M2 to M5.
+Status: **M2, rules v1.** The pipeline runs identity-free features through hand-written
+emission rules, a per-half Viterbi decoder with switch costs, and boundary refinement. On external
+games (Metrica open data) it beats the ported upstream baseline on spellF1. See
+`docs/label_derivation.md` for the external data. The learned emissions come in M4 and tuning in M5.
 
 ## Setup (Windows, Python 3.11)
 
@@ -29,6 +31,7 @@ All commands go through `tasks.py`:
 .venv\Scripts\python.exe tasks.py validate             official validator + LF check + SHA-256
 .venv\Scripts\python.exe tasks.py report               aggregate sanity numbers
 .venv\Scripts\python.exe tasks.py synthetic --preset full
+.venv\Scripts\python.exe tasks.py external --prepare     download (pinned) + convert + score external games
 ```
 
 `submission` writes `outputs\real\submission.csv` with LF line endings and prints its SHA-256. A

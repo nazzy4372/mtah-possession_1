@@ -8,7 +8,9 @@
     python tasks.py report [F] [--spec S]             aggregate sanity numbers for a submission
     python tasks.py synthetic [--out D] [--preset small|full] [--seed N]
                                                       write a synthetic bundle in ATD format
-    python tasks.py external                          (M3) convert + score external games
+    python tasks.py external [--games 1 2 3] [--prepare]
+                                                      download + convert external games (if
+                                                      needed) and score baseline vs v1
     python tasks.py tune                              (M5) Optuna on external games
 
 --data-dir defaults to the MTAH_DATA_DIR environment variable. Output defaults to
@@ -51,7 +53,7 @@ def cmd_submission(args):
     spec = _spec(args.spec)
     started = time.perf_counter()
     try:
-        result = pipeline.run(data_dir, spec)
+        result = pipeline.run(data_dir, spec, method=args.method)
     except pipeline.KickoffInconsistent as error:
         print("FAILED  {}".format(error))
         print("Run tools/kickoff_diag.py for the full aggregate breakdown.")
@@ -60,7 +62,7 @@ def cmd_submission(args):
     elapsed = time.perf_counter() - started
 
     # Aggregates only: this runs on the real match, and its output may be shared.
-    print("game        {}  ({} frames)".format(spec.name, spec.n_frames))
+    print("game        {}  ({} frames), method {}".format(spec.name, spec.n_frames, args.method))
     for kickoff in result.kickoffs:
         print("kickoff     {}".format(kickoff.describe(spec.fps)))
         for window, values in kickoff.diagnostics.items():
@@ -112,6 +114,20 @@ def cmd_synthetic(args):
     return 0
 
 
+def cmd_external(args):
+    sys.path.insert(0, str(ROOT))
+    from ext import download, evaluate, metrica
+
+    missing = [g for g in args.games
+               if not (metrica.BUNDLES / "metrica_g{}".format(g) / "gt.csv").is_file()]
+    if args.prepare or missing:
+        download.download_metrica()
+        for g in (args.games if args.prepare else missing):
+            print("converting Metrica game {} ...".format(g))
+            metrica.convert(g)
+    return evaluate.main(["--games", *map(str, args.games), "--bootstrap", str(args.bootstrap)])
+
+
 def cmd_not_yet(milestone):
     def run(args):
         print("not implemented until {} (see CLAUDE.md section 5)".format(milestone))
@@ -132,6 +148,8 @@ def main(argv=None):
     p.add_argument("--data-dir", help="data bundle (default: $MTAH_DATA_DIR)")
     p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--spec", help="game_spec.json for a non-BAR-ATH bundle")
+    p.add_argument("--method", default="v1", choices=("v1", "baseline"),
+                   help="v1 (rules + decoder, default) or the ported upstream baseline")
     p.set_defaults(func=cmd_submission)
 
     p = sub.add_parser("validate", help="official validator, LF check and SHA-256")
@@ -149,7 +167,12 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_synthetic)
 
-    sub.add_parser("external", help="(M3)").set_defaults(func=cmd_not_yet("M3"))
+    p = sub.add_parser("external", help="download/convert external games, score methods")
+    p.add_argument("--games", nargs="+", type=int, default=[1, 2, 3])
+    p.add_argument("--bootstrap", type=int, default=200)
+    p.add_argument("--prepare", action="store_true",
+                   help="download (pinned, SHA-256 checked) and convert the games first")
+    p.set_defaults(func=cmd_external)
     sub.add_parser("tune", help="(M5)").set_defaults(func=cmd_not_yet("M5"))
 
     args = parser.parse_args(argv)

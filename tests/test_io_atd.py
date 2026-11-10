@@ -38,10 +38,10 @@ def test_handmade_file_values_units_and_indexing(tmp_path):
     # first <Team> is home; slot order is <Player> order
     assert tr.slot_team.tolist() == [io_atd.AWAY, io_atd.HOME]
     assert (tr.meta.home_name, tr.meta.away_name) == ("Home FC", "Away FC")
-    # row i = frame_id i + 1; normalised -> metres; km/h -> m/s
+    # row i = frame_id i + 1; normalised -> metres; s is already m/s
     assert tr.players_xy[0, 0].tolist() == [0.5 * 105.3, 0.25 * 68.0]
-    assert tr.players_speed[0, 0] == pytest.approx(10.0)
-    assert tr.ball_speed[0] == pytest.approx(20.0)
+    assert tr.players_speed[0, 0] == 36.0
+    assert tr.ball_speed[0] == 72.0
     assert np.isnan(tr.players_xy[0, 1]).all() and np.isnan(tr.ball_xy[1]).all()
     assert tr.players_xy[1, 1].tolist() == [105.3, 68.0]
     assert np.isnan(tr.players_speed[2, 1])

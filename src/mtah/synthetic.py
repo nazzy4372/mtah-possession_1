@@ -210,10 +210,10 @@ def corrupt(sim: HalfSim, n_pre: int, slot_pools, rng: np.random.Generator):
     return slots, ball
 
 
-def _speed_kmh(xy: np.ndarray) -> np.ndarray:
+def _speed_ms(xy: np.ndarray) -> np.ndarray:
     step = np.full(xy.shape[:-1], np.nan)
     step[1:] = np.hypot(xy[1:, ..., 0] - xy[:-1, ..., 0], xy[1:, ..., 1] - xy[:-1, ..., 1])
-    return step * FPS * 3.6
+    return step * FPS
 
 
 def _group(x: float, y: float, s: float) -> str:
@@ -225,8 +225,8 @@ def _group(x: float, y: float, s: float) -> str:
 
 def format_bodies(slots: np.ndarray, ball: np.ndarray) -> List[str]:
     """Line bodies (everything after '<frame_id>:') for simulated frames."""
-    slot_speed = _speed_kmh(slots)
-    ball_speed = _speed_kmh(ball)
+    slot_speed = _speed_ms(slots)
+    ball_speed = _speed_ms(ball)
     bodies = []
     for i in range(len(ball)):
         players = ";".join(_group(slots[i, k, 0], slots[i, k, 1], slot_speed[i, k])
@@ -235,8 +235,12 @@ def format_bodies(slots: np.ndarray, ball: np.ndarray) -> List[str]:
     return bodies
 
 
-def metadata_xml(slot_team: np.ndarray, n_frames: int, plans: List[HalfPlan]) -> str:
-    """EPTS metadata in the structure kloppy's Metrica EPTS reader expects."""
+def metadata_xml(slot_team: np.ndarray, n_frames: int, periods, home: str = HOME_NAME,
+                 away: str = AWAY_NAME, pitch=PITCH) -> str:
+    """EPTS metadata in the structure kloppy's Metrica EPTS reader expects.
+
+    periods: [(first_video_frame, last_video_frame), ...] for the first two periods.
+    Shared by the synthetic generator and the external-game converters (ext/)."""
     players = "\n".join(
         '      <Player id="P{0}" teamId="{1}"><Name>Track {0}</Name>'
         '<ShirtNumber>{0}</ShirtNumber></Player>'.format(i + 1, TEAM_IDS[int(t)])
@@ -254,7 +258,7 @@ def metadata_xml(slot_team: np.ndarray, n_frames: int, plans: List[HalfPlan]) ->
     periods = "\n".join(
         '        <ProviderParameter><Name>{0}_start</Name><Value>{1}</Value></ProviderParameter>\n'
         '        <ProviderParameter><Name>{0}_end</Name><Value>{2}</Value></ProviderParameter>'
-        .format(names[i], p.first + 1, p.last + 1) for i, p in enumerate(plans[:2]))
+        .format(names[i], first + 1, last + 1) for i, (first, last) in enumerate(periods[:2]))
     return """<?xml version="1.0" encoding="utf-8"?>
 <main>
   <Metadata>
@@ -300,7 +304,7 @@ def metadata_xml(slot_team: np.ndarray, n_frames: int, plans: List[HalfPlan]) ->
           <Sensor id="speed">
             <Name>Speed</Name>
             <Channels>
-              <Channel id="s"><Name>speed</Name><Unit>km/h</Unit></Channel>
+              <Channel id="s"><Name>speed</Name><Unit>m/s</Unit></Channel>
             </Channels>
           </Sensor>
         </Sensors>
@@ -325,8 +329,8 @@ def metadata_xml(slot_team: np.ndarray, n_frames: int, plans: List[HalfPlan]) ->
   </DataFormatSpecifications>
 </main>
 """.format(fps=FPS, periods=periods, home_id=TEAM_IDS[0], away_id=TEAM_IDS[1],
-           width=int(round(PITCH[0])), height=int(round(PITCH[1])), home=HOME_NAME,
-           away=AWAY_NAME, players=players, channels=channels, n=n_frames, refs=refs)
+           width=int(round(pitch[0])), height=int(round(pitch[1])), home=home,
+           away=away, players=players, channels=channels, n=n_frames, refs=refs)
 
 
 def smart_tagging_xml(plans: List[HalfPlan]) -> str:
@@ -400,7 +404,7 @@ def generate(out_dir, preset_name: str = "small", seed: int = 0) -> Dict:
                 handle.write("".join(batch))
                 batch = []
         handle.write("".join(batch))
-    _write_text(paths["atd_meta"], metadata_xml(slot_team, n, plans))
+    _write_text(paths["atd_meta"], metadata_xml(slot_team, n, [(p.first, p.last) for p in plans]))
     _write_text(paths["smart_tagging"], smart_tagging_xml(plans))
     _write_text(out / "gt.csv", "frame,label\n" + "".join(
         "{},{}\n".format(i, label) for i, label in enumerate(gt)))

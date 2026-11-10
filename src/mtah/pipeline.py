@@ -1,8 +1,12 @@
 """Data bundle -> per-frame labels -> submission CSV.
 
-M1 wiring: parse ATD -> placeholder labeller (upstream baseline port) -> graded-frame policy with
-algorithmic kickoff detection. M2 swaps the labeller for emissions + decoder; the contract around
-it (row count, X on ungraded frames only, LF line endings, deterministic bytes) stays as is.
+    parse ATD -> kickoff detection (halves.py)
+              -> features -> emissions (rules v1) -> Viterbi per half -> boundary refinement
+              -> graded-frame policy (X outside the halves, D before each kickoff)
+
+``method="baseline"`` swaps in the ported upstream baseline (nearest player, +/-50-frame vote) and is
+the reference every external comparison is made against. The contract around either method (row
+count, X on ungraded frames only, LF line endings, deterministic bytes) is checked before writing.
 """
 
 import hashlib
@@ -13,7 +17,10 @@ from typing import List
 
 import numpy as np
 
-from mtah import baseline_port, halves, io_atd
+from mtah import baseline_port, decode, emission, features, halves, io_atd, refine
+from mtah.decode import DecoderParams
+from mtah.emission import EmissionParams
+from mtah.refine import RefineParams
 from mtah.spec import GameSpec
 
 VALID_LABELS = ("H", "A", "D", "X")
@@ -41,21 +48,49 @@ class RunResult:
     timings: dict = field(default_factory=dict)
 
 
-def run(data_dir, spec: GameSpec) -> RunResult:
+@dataclass(frozen=True)
+class Params:
+    emission: EmissionParams = EmissionParams()
+    decoder: DecoderParams = DecoderParams()
+    refine: RefineParams = RefineParams()
+    use_refine: bool = True
+
+
+METHODS = ("v1", "baseline")
+
+
+def label_tracking(tracking, spec: GameSpec, method: str = "v1", params: Params = Params(),
+                   kickoffs=None):
+    """(labels, kickoffs) for an in-memory Tracking. The evaluation harness calls this directly so
+    it can corrupt a Tracking (ball dropout) before labelling."""
+    if kickoffs is None:
+        kickoffs = halves.detect_kickoffs(tracking, spec)
+        if not all(k.consistent for k in kickoffs):
+            raise KickoffInconsistent(kickoffs, spec.fps)
+    if method == "baseline":
+        raw = baseline_port.placeholder_labels(tracking)
+    elif method == "v1":
+        F = features.compute(tracking, spec)
+        logp = emission.rules_v1(F, params.emission)
+        raw = decode.decode(logp, spec, kickoffs, params.decoder)
+        if params.use_refine:
+            raw = refine.refine(raw, F, spec, params.refine, kickoffs)
+    else:
+        raise ValueError("unknown method {!r}; have {}".format(method, METHODS))
+    labels = halves.apply_policy(raw, spec, kickoffs)
+    check_labels(labels, spec)
+    return labels, kickoffs
+
+
+def run(data_dir, spec: GameSpec, method: str = "v1", params: Params = Params()) -> RunResult:
     timings = {}
     t0 = time.perf_counter()
     tracking = io_atd.load_game(data_dir, spec)
     timings["parse_s"] = time.perf_counter() - t0
 
     t1 = time.perf_counter()
-    raw = baseline_port.placeholder_labels(tracking)
-    kickoffs = halves.detect_kickoffs(tracking, spec)
-    if not all(k.consistent for k in kickoffs):
-        raise KickoffInconsistent(kickoffs, spec.fps)
-    labels = halves.apply_policy(raw, spec, kickoffs)
+    labels, kickoffs = label_tracking(tracking, spec, method, params)
     timings["label_s"] = time.perf_counter() - t1
-
-    check_labels(labels, spec)
     return RunResult(labels=labels, kickoffs=kickoffs, timings=timings)
 
 

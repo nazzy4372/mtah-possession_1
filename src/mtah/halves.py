@@ -28,11 +28,15 @@ Refinement with the ball, inside the REFINE_S before the formation breaks:
   * else the first frame the ball is seen within NEAR_SPOT_M of the spot;
   * else the break itself.
 
-Special cases:
-  data-start  tracking begins within 1 s of the block start after DATA_START_S with none, and the
-              formation is already in place and breaks within DATA_START_MAX_S. The data began at
-              the kickoff (a first half graded from its own kickoff).
-  fallback    nothing found: the published block start, flagged, with aggregate diagnostics.
+When tracking begins at the block start (within 1 s, after DATA_START_S with none):
+  * a formation already in place when the data begins counts as the line-up whatever its length
+    (the data began during the line-up);
+  * live-start: no formation, and players already running (median speed >= LIVE_SPEED_MS over
+    LIVE_WINDOW_S). Tracking began after the kick, so the kickoff is the block start. Seen on
+    external game 1 (2.4 m/s against 0-0.4 m/s at the five line-up starts). Players walking out
+    before a second half are slow, so they do not trigger it.
+fallback: nothing found, so the published block start is used, flagged, with aggregate
+diagnostics.
 
 Consistency (the assertion of rule 7): the kickoff must lie inside the search window. When the game
 publishes kickoff anchors (BAR-ATH's games.py does), it must also lie within ANCHOR_TOL_S of the
@@ -40,6 +44,7 @@ anchor. The anchor checks the detector and never sets a label. A kickoff that fa
 marked inconsistent, and pipeline.run refuses to write a file.
 """
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -62,13 +67,14 @@ MAX_HELD_GAP = 5
 # windows and checks
 LEAD_S = 10.0               # a first half is graded from its kickoff, so look slightly before
 SEARCH_S = 300.0
-DATA_START_S = 2.0
-DATA_START_MAX_S = 5.0
+DATA_START_S = 2.0          # tracking "begins" after at least this long without any
+LIVE_WINDOW_S = 3.0
+LIVE_SPEED_MS = 1.5         # players running at data start: play is already live
 ANCHOR_TOL_S = 2.0
 
 OK, VIOLATED, UNKNOWN = 1, -1, 0
 LABEL_X, LABEL_D = "X", "D"
-DETECTED = ("formation+ball", "formation", "data-start")
+DETECTED = ("formation+ball", "formation", "live-start")
 
 
 @dataclass(frozen=True)
@@ -219,6 +225,19 @@ def _refine_with_ball(tracking, lo: int, brk: int, fps: int, centre):
     return brk, False
 
 
+def _players_running(tracking, start: int, fps: int) -> bool:
+    """Median player speed over the first LIVE_WINDOW_S at least LIVE_SPEED_MS: play is live."""
+    seg = tracking.players_xy[start:start + int(round(LIVE_WINDOW_S * fps))]
+    if len(seg) < 2:
+        return False
+    step = np.hypot(np.diff(seg[..., 0], axis=0), np.diff(seg[..., 1], axis=0)) * fps
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN frames
+        per_frame = np.nanmedian(step, axis=1)
+    per_frame = per_frame[np.isfinite(per_frame)]
+    return bool(len(per_frame)) and float(np.median(per_frame)) >= LIVE_SPEED_MS
+
+
 def _data_begin_at_block(tracking, first: int, fps: int):
     """The frame tracking begins, if within 1 s of the block start after DATA_START_S with none."""
     tracked = tracking.player_observed.any(axis=1)
@@ -300,12 +319,14 @@ def detect_kickoff(tracking, half: int, first: int, last: int, fps: int,
         runs = [r for r in formation_runs(state, fps) if r[2] == "violated"]
         data_begin = _data_begin_at_block(tracking, first, fps)
 
-        if data_begin is not None and runs and abs(lo + runs[0][0] - data_begin) <= fps // 2 \
-                and runs[0][1] - runs[0][0] < DATA_START_MAX_S * fps:
-            return result(first, "data-start")
+        if data_begin is not None and state[data_begin - lo] != OK \
+                and _players_running(tracking, data_begin, fps):
+            return result(first, "live-start")
 
+        # A line-up qualifies by length, or by being in place the moment the data begins.
         min_run = int(round(MIN_FORMATION_S * fps))
-        lineup = next(((a, b) for a, b, _ in runs if b - a >= min_run), None)
+        lineup = next(((a, b) for a, b, _ in runs if b - a >= min_run or (
+            data_begin is not None and abs(lo + a - data_begin) <= fps // 2)), None)
         if lineup is not None:
             frame, used_ball = _refine_with_ball(tracking, lo, lo + lineup[1], fps, centre)
             return result(frame, "formation+ball" if used_ball else "formation")
