@@ -1,3 +1,5 @@
 * text=auto eol=lf
+# Trained models are stored byte-exact (LightGBM writes a CRLF trailer; no normalisation).
+models/** -text
 *.bat text eol=crlf
 *.cmd text eol=crlf

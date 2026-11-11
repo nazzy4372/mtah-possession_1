@@ -1,0 +1,335 @@
+"""Learned emissions (v2): LightGBM on noise-augmented external games, leave-one-game-out.
+
+    python -m ext.train cache            # feature matrices for every external game (cached)
+    python -m ext.train logo [--variant all|noshape|rawspeed] [--grid]
+    python -m ext.train final            # train on every game, write models/emission_v2.txt
+
+Protocol:
+  * training rows: each game under the FULL noise model with seed 2000 + i, every SUBSAMPLE-th
+    graded frame, plus a home/away-mirrored copy (labels swapped);
+  * evaluation: the held-out game under the full noise model with a different seed (1000 + i,
+    the same corrupted copy v1 and the baseline are scored on in ext/evaluate.py), every frame;
+  * the model outputs p(H, A, D | x). It is calibrated with one temperature fitted on the
+    out-of-fold predictions, divided by the class prior to give emission likelihoods, then
+    decoded with the same Viterbi and refinement as v1;
+  * LightGBM is deterministic (deterministic=True, force_row_wise=True, fixed seeds and thread
+    count); inference runs single-threaded.
+Nothing here touches the provided match.
+"""
+
+import argparse
+import json
+import sys
+import time
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path[:0] = [str(ROOT / "src"), str(ROOT)]
+
+from ext import evaluate as ev  # noqa: E402
+from mtah import decode, features, halves, learn_features, refine  # noqa: E402
+from mtah.official import pm  # noqa: E402
+
+CACHE = ROOT / "ext_cache" / "features"
+MODELS = ROOT / "models"
+OUT = ROOT / "outputs" / "external"
+SUBSAMPLE = 5
+TRAIN_SEED, EVAL_SEED = 2000, 1000
+
+LGB_PARAMS = {
+    "objective": "multiclass", "num_class": 3, "learning_rate": 0.05, "num_leaves": 31,
+    "min_data_in_leaf": 400, "feature_fraction": 0.8, "bagging_fraction": 0.8,
+    "bagging_freq": 1, "lambda_l2": 1.0, "seed": 0, "deterministic": True,
+    "force_row_wise": True, "num_threads": 4, "verbosity": -1,
+}
+NUM_ROUNDS = 250
+
+VARIANTS = {
+    "all": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW],
+    "noshape": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW
+                              and n not in learn_features.GROUP_SHAPE],
+    "rawspeed": lambda names: [n for n in names if not n.startswith("ps_rank")
+                               and n != "ps_z"],
+}
+
+
+# -- feature cache -------------------------------------------------------------------------------
+
+def cache_path(game, condition, seed):
+    return CACHE / "{}_{}_{}.npz".format(game, condition, seed)
+
+
+def prepare(game, condition, seed):
+    """Features + everything needed to decode and score one (game, condition, seed)."""
+    path = cache_path(game, condition, seed)
+    if path.is_file():
+        data = np.load(path, allow_pickle=False)
+        return {k: data[k] for k in data.files}
+    bundle, spec, gt = ev.load(game)
+    tracking = ev.tracking_for(bundle, spec, condition, seed)
+    kickoffs = halves.detect_kickoffs(tracking, spec)
+    F = features.compute(tracking, spec)
+    names, X = learn_features.build(tracking, spec, F)
+    data = {"X": X, "names": np.array(names), "gt": gt.astype(np.int8),
+            "graded": spec.graded_mask(),
+            "kickoffs": np.array([[k.half, k.block_first, k.block_last, k.frame]
+                                  for k in kickoffs], dtype=np.int64),
+            "d_home": F.d_home, "d_away": F.d_away, "out_dist": F.out_dist,
+            "ball_speed": F.ball_speed}
+    CACHE.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, **data)
+    return data
+
+
+def game_list():
+    return ev.available_games()
+
+
+# -- model ---------------------------------------------------------------------------------------
+
+def training_rows(datasets, keep):
+    """Subsampled graded rows of several games, plus the H <-> A mirrored copy."""
+    xs, ys = [], []
+    for d in datasets:
+        names = list(d["names"])
+        cols = [names.index(k) for k in keep]
+        rows = np.flatnonzero(d["graded"] & (d["gt"] != pm.X))[::SUBSAMPLE]
+        X = d["X"][rows]
+        y = d["gt"][rows].astype(np.int64)
+        X_sw = learn_features.swap_teams(names, X)
+        y_sw = np.where(y == pm.H, pm.A, np.where(y == pm.A, pm.H, y))
+        xs += [X[:, cols], X_sw[:, cols]]
+        ys += [y, y_sw]
+    return np.vstack(xs), np.concatenate(ys)
+
+
+def fit(X, y, rounds=NUM_ROUNDS):
+    import lightgbm as lgb
+    data = lgb.Dataset(X, label=y, params={"verbosity": -1}, free_raw_data=True)
+    return lgb.train(LGB_PARAMS, data, num_boost_round=rounds)
+
+
+def raw_scores(booster, X):
+    return booster.predict(X, raw_score=True, num_threads=1)
+
+
+def log_softmax(z):
+    z = z - z.max(axis=1, keepdims=True)
+    return z - np.log(np.exp(z).sum(axis=1, keepdims=True))
+
+
+def fit_temperature(raws, labels):
+    """One temperature minimising the out-of-fold negative log-likelihood (grid search)."""
+    grid = np.round(np.arange(0.5, 4.01, 0.1), 2)
+    best = min(grid, key=lambda t: -np.mean(
+        log_softmax(raws / t)[np.arange(len(labels)), labels]))
+    return float(best)
+
+
+def emissions(raw, temperature, prior):
+    """log p(x | s) up to a constant: calibrated log posterior minus log prior."""
+    return log_softmax(raw / temperature) - np.log(prior)[None, :]
+
+
+# -- decoding + scoring --------------------------------------------------------------------------
+
+class _Spec:
+    """Just enough of a GameSpec for decode/refine/policy, rebuilt from the cache."""
+    def __init__(self, d, fps=25):
+        self.fps = fps
+        self.n_frames = len(d["gt"])
+        self.halves = tuple((int(h), int(a), int(b)) for h, a, b, _ in d["kickoffs"])
+        self._graded = d["graded"]
+
+    def graded_mask(self):
+        return self._graded
+
+
+def kickoffs_of(d):
+    return [halves.Kickoff(int(h), int(a), int(b), int(f), "cached")
+            for h, a, b, f in d["kickoffs"]]
+
+
+def decode_and_score(d, logp_graded, dec_params, use_refine=True, bootstrap=0):
+    spec = _Spec(d)
+    kos = kickoffs_of(d)
+    logp = np.zeros((spec.n_frames, 3))
+    logp[spec.graded_mask()] = logp_graded
+    labels = decode.decode(logp, spec, kos, dec_params)
+    if use_refine:
+        F = features.Features(ball_xy=None, ball_observed=None, ball_known=None,
+                              ball_speed=d["ball_speed"], ball_missing_s=None,
+                              d_home=d["d_home"], d_away=d["d_away"], out_dist=d["out_dist"],
+                              player_speed=None, last_touch=None, since_touch_s=None,
+                              shape_diff=None)
+        labels = refine.refine(labels, F, spec, refine.RefineParams(), kos)
+    labels = halves.apply_policy(labels, spec, kos)
+    r = pm.evaluate(d["gt"].astype(np.int8), pm.label_codes(labels), bootstrap_n=bootstrap)
+    return {"spell_f1_mean": r["spell_f1_mean"], "macro_f1": r["macro_f1"],
+            "spell_bootstrap_low": r["spell_bootstrap_low"],
+            "spell_bootstrap_high": r["spell_bootstrap_high"],
+            "n_pred_spells": r["n_pred_spells"], "n_gt_spells": r["n_gt_spells"],
+            "alive_dead_f1": r["alive_dead_f1"], "team_acc_both_alive": r["team_acc_both_alive"]}
+
+
+# -- leave-one-game-out --------------------------------------------------------------------------
+
+def logo(variant="all", verbose=True):
+    """Out-of-fold raw scores for every game (held-out copy, eval seed)."""
+    games = game_list()
+    train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
+    eval_sets = [prepare(g, "full", EVAL_SEED + i) for i, g in enumerate(games)]
+    keep = VARIANTS[variant](list(train_sets[0]["names"]))
+    oof = {}
+    for i, g in enumerate(games):
+        started = time.perf_counter()
+        X, y = training_rows([d for j, d in enumerate(train_sets) if j != i], keep)
+        booster = fit(X, y)
+        d = eval_sets[i]
+        names = list(d["names"])
+        Xe = d["X"][d["graded"]][:, [names.index(k) for k in keep]]
+        oof[g] = raw_scores(booster, Xe)
+        if verbose:
+            print("  fold {:<11} trained on {} rows in {:.0f} s".format(
+                g, len(y), time.perf_counter() - started), flush=True)
+    prior = np.bincount(np.concatenate([d["gt"][d["graded"] & (d["gt"] != pm.X)]
+                                        for d in train_sets]), minlength=3)[:3].astype(float)
+    prior = (prior + prior[[1, 0, 2]]) / 2.0          # the mirrored copy makes H and A equal
+    prior /= prior.sum()
+    return games, eval_sets, oof, prior, keep
+
+
+def calibrate(games, eval_sets, oof):
+    raws = np.vstack([oof[g] for g in games])
+    labels = np.concatenate([d["gt"][d["graded"]].astype(np.int64) for d in eval_sets])
+    keep = labels < 3
+    return fit_temperature(raws[keep], labels[keep])
+
+
+def score_all(games, eval_sets, oof, temperature, prior, dec_params, use_refine=True,
+              bootstrap=0):
+    rows = []
+    for g, d in zip(games, eval_sets):
+        r = decode_and_score(d, emissions(oof[g], temperature, prior), dec_params, use_refine,
+                             bootstrap)
+        rows.append({"game": g, **r})
+    return rows
+
+
+def mean_spell(rows):
+    return float(np.mean([r["spell_f1_mean"] for r in rows]))
+
+
+def final(variant, c_switch, c_dead, temperature):
+    """Train on every external game; write models/emission_v2.txt + .json (with provenance)."""
+    import lightgbm as lgb
+
+    games = game_list()
+    train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
+    keep = VARIANTS[variant](list(train_sets[0]["names"]))
+    X, y = training_rows(train_sets, keep)
+    booster = fit(X, y)
+    prior = np.bincount(y, minlength=3)[:3].astype(float)
+    prior /= prior.sum()
+    MODELS.mkdir(exist_ok=True)
+    booster.save_model(str(MODELS / "emission_v2.txt"))
+    manifests = {name: json.loads((ROOT / "ext" / "manifests" / (name + ".json")).read_text(
+        encoding="utf-8"))["ref"] for name in ("metrica", "skillcorner")}
+    meta = {"features": keep, "temperature": temperature, "prior": prior.tolist(),
+            "decoder": {"c_switch": c_switch, "c_die": c_dead, "c_restart": c_dead},
+            # LOGO: boundary snapping lowers v2's spellF1 on 10 of 13 games (0.388 vs 0.395)
+            "refine": False,
+            "variant": variant, "train_games": games, "rows": int(len(y)),
+            "subsample": SUBSAMPLE, "augment_seed_base": TRAIN_SEED,
+            "lightgbm": {"version": lgb.__version__, "params": LGB_PARAMS,
+                         "num_boost_round": NUM_ROUNDS},
+            "sources": manifests,
+            "note": "trained only on external games (Metrica open data, SkillCorner open data); "
+                    "nothing from the provided match"}
+    with open(MODELS / "emission_v2.json", "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(meta, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    print("wrote models/emission_v2.txt ({} features, {} rows)".format(len(keep), len(y)))
+    return 0
+
+
+COST_GRID = [(cs, cd) for cs in (4.0, 8.0, 15.0, 25.0) for cd in (8.0, 15.0, 25.0)]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("cache")
+    p = sub.add_parser("final")
+    p.add_argument("--variant", default="all", choices=sorted(VARIANTS))
+    p.add_argument("--c-switch", type=float, required=True)
+    p.add_argument("--c-dead", type=float, required=True)
+    p.add_argument("--temperature", type=float, required=True,
+                   help="from the out-of-fold calibration of the same variant (logo_<v>.json)")
+    p = sub.add_parser("logo")
+    p.add_argument("--variant", default="all", choices=sorted(VARIANTS))
+    p.add_argument("--grid", action="store_true", help="also grid the decoder costs on OOF")
+    p.add_argument("--c-switch", type=float)
+    p.add_argument("--c-dead", type=float)
+    p.add_argument("--no-refine", action="store_true")
+    p.add_argument("--bootstrap", type=int, default=0)
+    p.add_argument("--reuse", action="store_true",
+                   help="reuse saved out-of-fold predictions (decoding-only changes)")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "final":
+        return final(args.variant, args.c_switch, args.c_dead, args.temperature)
+
+    if args.cmd == "cache":
+        for i, g in enumerate(game_list()):
+            t = time.perf_counter()
+            prepare(g, "full", TRAIN_SEED + i)
+            prepare(g, "full", EVAL_SEED + i)
+            print("cached {} in {:.0f} s".format(g, time.perf_counter() - t), flush=True)
+        return 0
+
+    oof_file = OUT / "oof_{}.npz".format(args.variant)
+    if args.reuse and oof_file.is_file():
+        games = game_list()
+        eval_sets = [prepare(g, "full", EVAL_SEED + i) for i, g in enumerate(games)]
+        saved = np.load(oof_file)
+        oof = {g: saved[g] for g in games}
+        prior, temperature = saved["prior"], float(saved["temperature"])
+        keep = VARIANTS[args.variant](list(eval_sets[0]["names"]))
+        print("variant {}: reusing out-of-fold predictions".format(args.variant), flush=True)
+    else:
+        games, eval_sets, oof, prior, keep = logo(args.variant)
+        temperature = calibrate(games, eval_sets, oof)
+        print("variant {}: {} features, prior {}, temperature {}".format(
+            args.variant, len(keep), np.round(prior, 3).tolist(), temperature), flush=True)
+        OUT.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(oof_file, prior=prior, temperature=temperature,
+                            **{g: oof[g] for g in games})
+    costs = [(args.c_switch, args.c_dead)] if args.c_switch else \
+        (COST_GRID if args.grid else [(decode.DecoderParams().c_switch,
+                                       decode.DecoderParams().c_die)])
+    results = []
+    for cs, cd in costs:
+        dp = decode.DecoderParams(c_switch=cs, c_die=cd, c_restart=cd)
+        rows = score_all(games, eval_sets, oof, temperature, prior, dp, not args.no_refine,
+                         args.bootstrap)
+        results.append({"c_switch": cs, "c_dead": cd, "mean_spell_f1": mean_spell(rows),
+                        "rows": rows})
+        print("  c_switch {:>5} c_dead {:>5}  mean spellF1 {:.4f}  (Metrica {:.4f}, "
+              "SkillCorner {:.4f})".format(
+                  cs, cd, mean_spell(rows),
+                  mean_spell([r for r in rows if r["game"].startswith("metrica")]),
+                  mean_spell([r for r in rows if r["game"].startswith("sc_")])), flush=True)
+    with open(OUT / "logo_{}{}.json".format(args.variant, "_norefine" if args.no_refine else ""),
+              "w", encoding="utf-8", newline="\n") as handle:
+        json.dump({"variant": args.variant, "features": keep, "temperature": temperature,
+                   "prior": prior.tolist(), "results": results}, handle, indent=2)
+        handle.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

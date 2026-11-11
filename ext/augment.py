@@ -51,7 +51,10 @@ class AugmentParams:
     duplicate_s: tuple = (1.0, 5.0)
     duplicate_offset_m: float = 0.6
     jitter_m: float = 0.0              # clean external tracking already matches the real step size
-    dead_ball_fill: float = 0.7        # share of each dead stretch with a resting ball restored
+    # Share of each dead stretch with a resting ball restored. 1.0 gives P(ball missing | dead)
+    # 0.34-0.35 and P(missing | alive) 0.40-0.43 on Metrica, against about 0.34 / 0.45 estimated for
+    # the real match, so missingness carries almost no dead-ball signal, as on the real match.
+    dead_ball_fill: float = 1.0
     restart_jitter_m: float = 0.1
 
 
@@ -120,6 +123,23 @@ def restore_dead_ball(tracking: Tracking, rests, fraction: float, jitter_m: floa
         missing = np.isnan(ball[a:b, 0])
         fill = np.array([x, y]) + rng.normal(0.0, jitter_m, size=(b - a, 2))
         ball[a:b][missing] = fill[missing]
+
+
+def rests_from_labels(gt_codes, ball_xy, fps: int, dead_code: int = 2, lookahead_s: float = 1.0):
+    """Resting-ball stretches for sources without event coordinates (SkillCorner).
+
+    For each dead run, the restart spot is the first ball position observed within lookahead_s
+    after the run ends. The ball is taken to rest there over the whole run. This uses the external
+    game's labels and tracking only."""
+    dead = gt_codes == dead_code
+    seen = ~np.isnan(ball_xy[:, 0])
+    out = []
+    for start, stop in _runs(dead):
+        after = np.flatnonzero(seen[stop:stop + int(lookahead_s * fps)])
+        if len(after):
+            x, y = ball_xy[stop + int(after[0])]
+            out.append((start, stop, float(x), float(y), "end"))
+    return out
 
 
 def full(tracking: Tracking, seed: int = 0, params: AugmentParams = AugmentParams(),

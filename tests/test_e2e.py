@@ -17,9 +17,10 @@ def score(gt_path, labels):
     return pm.evaluate(gt, pm.label_codes(labels))
 
 
-def test_small_match_end_to_end(small_bundle, tmp_path):
+@pytest.mark.parametrize("method", pipeline.METHODS)
+def test_small_match_end_to_end(small_bundle, tmp_path, method):
     spec = small_bundle.spec
-    result = pipeline.run(small_bundle.path, spec)
+    result = pipeline.run(small_bundle.path, spec, method=method)
     path = tmp_path / "small.csv"
     pipeline.write_submission(path, result.labels)
     assert pm.validate_submission(pm.read_label_csv(path), spec.n_frames) is None

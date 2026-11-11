@@ -156,8 +156,9 @@ def main(argv=None):
     p.add_argument("--data-dir", help="data bundle (default: $MTAH_DATA_DIR)")
     p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--spec", help="game_spec.json for a non-BAR-ATH bundle")
-    p.add_argument("--method", default="v1", choices=("v1", "baseline"),
-                   help="v1 (rules + decoder, default) or the ported upstream baseline")
+    p.add_argument("--method", default="v2", choices=("v2", "v1", "baseline"),
+                   help="v2 (learned emissions + decoder, default), v1 (rules + decoder) or the "
+                        "ported upstream baseline")
     p.set_defaults(func=cmd_submission)
 
     p = sub.add_parser("validate", help="official validator, LF check and SHA-256")

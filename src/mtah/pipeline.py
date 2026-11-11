@@ -56,10 +56,10 @@ class Params:
     use_refine: bool = True
 
 
-METHODS = ("v1", "baseline")
+METHODS = ("v2", "v1", "baseline")
 
 
-def label_tracking(tracking, spec: GameSpec, method: str = "v1", params: Params = Params(),
+def label_tracking(tracking, spec: GameSpec, method: str = "v2", params: Params = Params(),
                    kickoffs=None):
     """(labels, kickoffs) for an in-memory Tracking. The evaluation harness calls this directly so
     it can corrupt a Tracking (ball dropout) before labelling."""
@@ -69,11 +69,17 @@ def label_tracking(tracking, spec: GameSpec, method: str = "v1", params: Params 
             raise KickoffInconsistent(kickoffs, spec.fps)
     if method == "baseline":
         raw = baseline_port.placeholder_labels(tracking)
-    elif method == "v1":
+    elif method in ("v1", "v2"):
         F = features.compute(tracking, spec)
-        logp = emission.rules_v1(F, params.emission)
-        raw = decode.decode(logp, spec, kickoffs, params.decoder)
-        if params.use_refine:
+        if method == "v1":
+            logp, dec = emission.rules_v1(F, params.emission), params.decoder
+            use_refine = params.use_refine
+        else:
+            from mtah import emission_v2
+            logp, dec = emission_v2.emissions(tracking, spec, F), emission_v2.decoder_params()
+            use_refine = emission_v2.load()[1].get("refine", False)
+        raw = decode.decode(logp, spec, kickoffs, dec)
+        if use_refine:
             raw = refine.refine(raw, F, spec, params.refine, kickoffs)
     else:
         raise ValueError("unknown method {!r}; have {}".format(method, METHODS))
@@ -82,7 +88,7 @@ def label_tracking(tracking, spec: GameSpec, method: str = "v1", params: Params 
     return labels, kickoffs
 
 
-def run(data_dir, spec: GameSpec, method: str = "v1", params: Params = Params()) -> RunResult:
+def run(data_dir, spec: GameSpec, method: str = "v2", params: Params = Params()) -> RunResult:
     timings = {}
     t0 = time.perf_counter()
     tracking = io_atd.load_game(data_dir, spec)

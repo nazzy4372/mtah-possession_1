@@ -51,7 +51,11 @@ def tracking_for(path, spec, condition, seed):
     if condition == "balldrop":
         augment.ball_dropout(tracking, seed=seed)
     elif condition == "full":
-        tracking = augment.full(tracking, seed=seed, fps=spec.fps, rests=load_rests(path))
+        rests = load_rests(path)
+        if not rests:   # no event coordinates (SkillCorner): restart spot from the tracking
+            gt = pm.label_codes(pm.read_label_csv(Path(path) / "gt.csv"))
+            rests = augment.rests_from_labels(gt, tracking.ball_xy, spec.fps)
+        tracking = augment.full(tracking, seed=seed, fps=spec.fps, rests=rests)
     elif condition != "clean":
         raise ValueError("unknown condition {!r}".format(condition))
     return tracking
