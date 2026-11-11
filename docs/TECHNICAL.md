@@ -1,7 +1,8 @@
 # Ball possession from automatic tracking: technical document
 
-More than a Hack 2027, Phase 1. Match: FC Barcelona (H) vs Athletic Club (A). Code:
-this repository; every command is listed in section 8.
+**Team Nuttertools.** More than a Hack 2027, Phase 1. Match: FC Barcelona (H) vs Athletic Club (A).
+Code: this repository; every command is listed in section 8. Submission file: `Nuttertools.csv`
+(SHA-256 `6ad9d4addca4cc8da84292254678682215e433888e534f7eb2f016d7f46d92e1`).
 
 ## 1. Approach, and why
 
