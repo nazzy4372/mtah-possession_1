@@ -32,6 +32,28 @@ sys.path.insert(0, str(ROOT / "src"))
 DEFAULT_OUT = ROOT / "outputs" / "real" / "submission.csv"
 
 
+RECORDED_SHA = ROOT / "config" / "submission.sha256"
+
+
+def _expected_sha(value):
+    """None, an explicit hex digest, or 'recorded' (the frozen SHA in config/submission.sha256)."""
+    if not value:
+        return None
+    if value == "recorded":
+        return RECORDED_SHA.read_text(encoding="utf-8").split()[0].lower()
+    return value.lower()
+
+
+def _check_sha(digest, expected):
+    if expected is None:
+        return 0
+    if digest == expected:
+        print("reproduced  identical bytes to the expected SHA-256")
+        return 0
+    print("MISMATCH    expected {}\n            got      {}".format(expected, digest))
+    return 1
+
+
 def _spec(path):
     from mtah.spec import GameSpec
     return GameSpec.load(path) if path else GameSpec.from_upstream("BAR-ATH")
@@ -82,7 +104,7 @@ def cmd_submission(args):
         result.timings["parse_s"], result.timings["label_s"], elapsed))
     print("wrote       {}".format(Path(args.out).resolve()))
     print("sha256      {}".format(digest))
-    return 0
+    return _check_sha(digest, _expected_sha(args.expect_sha256))
 
 
 def cmd_validate(args):
@@ -96,8 +118,9 @@ def cmd_validate(args):
     data = path.read_bytes()
     has_cr = b"\r" in data
     print("\nline endings  {}".format("FAIL: contains \\r bytes" if has_cr else "LF only (no \\r)"))
-    print("sha256        {}".format(sha256_of(path)))
-    return code or (1 if has_cr else 0)
+    digest = sha256_of(path)
+    print("sha256        {}".format(digest))
+    return code or (1 if has_cr else 0) or _check_sha(digest, _expected_sha(args.expect_sha256))
 
 
 def cmd_report(args):
@@ -171,6 +194,8 @@ def main(argv=None):
     p.add_argument("--data-dir", help="data bundle (default: $MTAH_DATA_DIR)")
     p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--spec", help="game_spec.json for a non-BAR-ATH bundle")
+    p.add_argument("--expect-sha256", metavar="HEX|recorded",
+                   help="fail unless the file has this SHA-256 ('recorded' = the frozen one)")
     p.add_argument("--method", default="v2", choices=("v2", "v1", "baseline"),
                    help="v2 (learned emissions + decoder, default), v1 (rules + decoder) or the "
                         "ported upstream baseline")
@@ -178,6 +203,8 @@ def main(argv=None):
 
     p = sub.add_parser("validate", help="official validator, LF check and SHA-256")
     p.add_argument("file", nargs="?", default=str(DEFAULT_OUT))
+    p.add_argument("--expect-sha256", metavar="HEX|recorded",
+                   help="fail unless the file has this SHA-256 ('recorded' = the frozen one)")
     p.set_defaults(func=cmd_validate)
 
     p = sub.add_parser("report", help="aggregate sanity numbers for a submission")

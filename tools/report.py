@@ -54,6 +54,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("file")
     parser.add_argument("--spec", help="game_spec.json (default: BAR-ATH from upstream games.py)")
+    parser.add_argument("--strict", action="store_true", help="exit 1 if any alarm warns")
     args = parser.parse_args(argv)
     spec = GameSpec.load(args.spec) if args.spec else GameSpec.from_upstream("BAR-ATH")
 
@@ -80,8 +81,43 @@ def main(argv=None):
     print("\nwhole match: {} possessions, X on graded frames: {}".format(
         total_spells, sum(r["X"] for r in rows)))
     print("graded frames: {}".format(graded))
+
+    warnings = alarms(rows)
+    print("\nsanity alarms (checks, never tuning targets; ranges fixed in M6 before any check)")
+    for line in warnings["lines"]:
+        print("  " + line)
+    print("  {} warning(s)".format(warnings["n_warn"]))
     print("sha256: {}".format(sha256_of(args.file)))
-    return 0
+    return 1 if (args.strict and warnings["n_warn"]) else 0
+
+
+# (name, key, low, high, why). Football-norm ranges, hypotheses from CLAUDE.md M6, not tuned.
+ALARMS = (
+    ("possessions per half", "possessions", 100, 200, "football norms (HYPOTHESIS)"),
+    ("mean possession (s)", "mean_possession_s", 5.0, 25.0, "plausible durations"),
+    ("dead-ball share", "D_share", 0.25, 0.50, "ball out of play ~35-45% of a match"),
+    ("home share of alive", "home_share_of_alive", 0.45, 0.75, "Barcelona usually 55-70%"),
+)
+
+
+def alarms(rows):
+    lines, n_warn = [], 0
+    for name, key, lo, hi, why in ALARMS:
+        for r in rows:
+            v = r[key]
+            ok = lo <= v <= hi
+            n_warn += not ok
+            lines.append("{:<4} half {}  {:<22} {:>9}  in [{}, {}]  ({})".format(
+                "PASS" if ok else "WARN", r["half"], name,
+                "{:.3f}".format(v) if isinstance(v, float) else v, lo, hi, why))
+    for r in rows:
+        flicker = r["possessions_under_0.5s"] / max(1, r["possessions"])
+        ok = flicker <= 0.05 and r["X"] == 0
+        n_warn += not ok
+        lines.append("{:<4} half {}  {:<22} {:>9}  X on graded frames {}  (flicker <= 5%, no X)"
+                     .format("PASS" if ok else "WARN", r["half"], "possessions < 0.5 s",
+                             "{:.1%}".format(flicker), r["X"]))
+    return {"lines": lines, "n_warn": n_warn}
 
 
 if __name__ == "__main__":
