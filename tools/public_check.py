@@ -25,6 +25,10 @@ SCORER = ROOT / "upstream" / "evaluation" / "run_evaluation.py"
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("file", nargs="?", default=str(ROOT / "outputs" / "real" / "submission.csv"))
+    parser.add_argument("--detail", action="store_true",
+                        help="also print the scorer's detail block: frame accuracy, confusion "
+                             "matrix (GT x ours) and per-class precision/recall on the graded "
+                             "frames of the public window")
     args = parser.parse_args(argv)
     work = ROOT / "outputs" / "real" / "public_check"
     results = work / "results"
@@ -32,9 +36,11 @@ def main(argv=None):
         shutil.rmtree(results)
     results.mkdir(parents=True)
     shutil.copyfile(args.file, results / "ours.csv")
-    return subprocess.call([sys.executable, str(SCORER), "--gt", "public",
-                            "--results", str(results), "--out", str(work), "--no-detail"],
-                           cwd=str(SCORER.parent))
+    command = [sys.executable, str(SCORER), "--gt", "public", "--results", str(results),
+               "--out", str(work)]
+    if not args.detail:
+        command.append("--no-detail")
+    return subprocess.call(command, cwd=str(SCORER.parent))
 
 
 if __name__ == "__main__":
