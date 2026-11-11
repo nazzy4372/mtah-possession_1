@@ -115,8 +115,9 @@ alive) is 0.43, against an estimated 0.34 / 0.45 on the real match.
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
 - **Public 5-minute window:** used as a correctness check only, after everything was frozen, and
-  looked at **once** (one earlier run scored only the upstream baselines, to test the tool). See
-  section 6 and `docs/public_window_log.md`.
+  looked at **twice**, both times on the frozen file: the scoreboard, then its frame-level
+  breakdown. One earlier run scored only the upstream baselines, to test the tool. See section 6
+  and `docs/public_window_log.md`.
 
 ## 6. Results
 
@@ -148,8 +149,9 @@ number, so the closeness is independent evidence that the noise model is realist
 | Barcelona share of ball-in-play | 59.9% | 58.8% | 45–75% | pass |
 | possessions under 0.5 s; X on graded frames | 0; 0 | 0; 0 | ≤5%; 0 | pass |
 
-**Public window (correctness check, looked at once, after freezing):** the frozen submission scores
-macroF1 **0.783** and spellF1 **0.513** on the public 5 minutes. It reports 15 possessions of mean
+**Public window (correctness check, after freezing):** the frozen submission scores macroF1
+**0.783** and spellF1 **0.513** on the public 5 minutes. Frame accuracy is 0.814, the alive/dead F1
+is 0.941, and the team call is right on 89% of frames where both agree the ball is alive. It reports 15 possessions of mean
 17.8 s, against the truth's 17 of mean 14.2 s. For reference, the upstream baselines score
 0.58–0.62 macroF1 and up to 0.424 spellF1 on the same window. The check shows that frames are
 aligned, the file is well-formed and the labels mean what we intend. With only 17 possessions, it
