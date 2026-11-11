@@ -42,3 +42,31 @@ Notes:
   LightGBM's probabilities were already calibrated.
 - **Determinism**: retraining produces a byte-identical `models/emission_v2.txt`
   (SHA-256 `d33c42ac…3c85`). Inference is single-threaded.
+
+# Tuning and freeze (M5)
+
+`python tasks.py tune` (`src/mtah/tune.py`): Optuna, seeded TPE, 60 trials, over the three
+decoder costs, the emission temperature, a dead-ball bias and refinement on/off. The objective is
+the mean official spellF1 on the leave-one-game-out predictions under `full` noise. Trials are
+decoded in batches with `decode.viterbi_batch`, which gives identical paths to the single decoder.
+
+| | spellF1, 13 external games |
+|---|---|
+| M4 settings (costs 15 / 25 / 25, T 1.0, no refinement) | 0.3947 (chosen on the same games) |
+| best single Optuna trial | 0.3955 |
+| **nested 2-fold estimate** (tune on one fold, score the other, swap; folds mix both sources) | **0.3932** |
+| frozen median of the top 10 trials, re-scored on all 13 | 0.3940 (optimistic) |
+
+Frozen in `config/final.yaml`: c_switch 7.46, c_die 11.21, c_restart 5.57, temperature 1.77,
+dead-ball bias +0.24, refinement off.
+
+Findings:
+- **Tuning gains nothing measurable.** The landscape is flat, and the M4 settings were already at
+  the optimum. A temperature of 1.77 roughly halves the emission scale, so the frozen costs
+  correspond to about 13 / 20 / 10 at temperature 1, close to M4's.
+- **Under-segmentation is a model limit, not a decoder one.** Across all tuning the predicted
+  possession count stays at 0.59–0.74 of the truth per game. Lower switch costs add spurious
+  switches faster than they recover real short possessions, so spellF1 does not improve. The fix
+  would have to come from sharper team evidence at changes of control.
+- **Wide windows are not the cause.** Retraining without the ±5 s windows (variant `short`)
+  scores the same (0.3941 vs 0.3947 at the M4 settings), so the shipped `all` model is kept.

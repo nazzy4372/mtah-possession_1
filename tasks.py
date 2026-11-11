@@ -64,6 +64,13 @@ def cmd_submission(args):
 
     # Aggregates only: this runs on the real match, and its output may be shared.
     print("game        {}  ({} frames), method {}".format(spec.name, spec.n_frames, args.method))
+    if args.method == "v2":
+        from mtah import emission_v2
+        s = emission_v2.settings()
+        print("settings    from {}: c_switch {:.2f} c_die {:.2f} c_restart {:.2f} temperature "
+              "{:.2f} dead_bias {:+.2f} refine {}".format(
+                  s["source"], s["c_switch"], s["c_die"], s["c_restart"], s["temperature"],
+                  s["dead_bias"], s["refine"]))
     for kickoff in result.kickoffs:
         print("kickoff     {}".format(kickoff.describe(spec.fps)))
         for window, values in kickoff.diagnostics.items():
@@ -136,6 +143,14 @@ def cmd_external(args):
     return evaluate.main(argv)
 
 
+def cmd_tune(args):
+    from mtah import tune
+    argv = ["--variant", args.variant, "--trials", str(args.trials)]
+    if args.nested_only:
+        argv.append("--nested-only")
+    return tune.main(argv)
+
+
 def cmd_not_yet(milestone):
     def run(args):
         print("not implemented until {} (see CLAUDE.md section 5)".format(milestone))
@@ -183,7 +198,12 @@ def main(argv=None):
     p.add_argument("--prepare", action="store_true",
                    help="download (pinned, SHA-256 checked) and convert Metrica + SkillCorner")
     p.set_defaults(func=cmd_external)
-    sub.add_parser("tune", help="(M5)").set_defaults(func=cmd_not_yet("M5"))
+    p = sub.add_parser("tune", help="Optuna on external out-of-fold predictions -> config/final.yaml")
+    p.add_argument("--variant", default="all")
+    p.add_argument("--trials", type=int, default=60)
+    p.add_argument("--nested-only", action="store_true",
+                   help="only the nested 2-fold estimate; do not write config/final.yaml")
+    p.set_defaults(func=cmd_tune)
 
     args = parser.parse_args(argv)
     return args.func(args)

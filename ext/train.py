@@ -53,6 +53,10 @@ VARIANTS = {
                               and n not in learn_features.GROUP_SHAPE],
     "rawspeed": lambda names: [n for n in names if not n.startswith("ps_rank")
                                and n != "ps_z"],
+    # M5: without the widest (+/-5 s) windows, which may make emissions too slow to follow
+    # short possessions
+    "short": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW
+                            and not n.endswith("_m5")],
 }
 
 

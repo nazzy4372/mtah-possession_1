@@ -10,7 +10,8 @@ p(H, A, D) with a small LightGBM model, then decodes each half with a Viterbi de
 for switches. The model is trained only on noise-augmented external games (Metrica and SkillCorner
 open data) and shipped in `models/`. Leave-one-game-out spellF1 on 13 external games is 0.395,
 against 0.301 for the rules and 0.189 for the ported baseline (`docs/ablation.md`). The external
-data and its labels are described in `docs/label_derivation.md`. Tuning comes in M5.
+data and its labels are described in `docs/label_derivation.md`. M5 tuned the decoding with Optuna
+on held-out external predictions (nested estimate 0.393) and froze it in `config/final.yaml`.
 
 ## Setup (Windows, Python 3.11)
 

@@ -55,16 +55,76 @@ def viterbi(logp: np.ndarray, costs: np.ndarray) -> np.ndarray:
     return path
 
 
-def decode(logp: np.ndarray, spec, kickoffs, params: DecoderParams = DecoderParams()) -> np.ndarray:
-    """Labels (H/A/D/X) for the whole video: decoded per half, X outside the halves."""
-    labels = np.full(len(logp), "X", dtype="<U1")
-    costs = transition_costs(params)
+def viterbi_batch(logps, costs) -> list:
+    """Viterbi for many sequences at once: identical paths to ``viterbi`` for each item.
+
+    logps: list of (n_i, 3) arrays; costs: (B, 3, 3). One pass over time serves every item (the
+    per-frame numpy overhead is paid once, not B times), which is what makes tuning affordable.
+    Tie-breaking matches ``viterbi`` exactly: the same additions, the first maximum wins.
+    """
+    B = len(logps)
+    if B == 0:
+        return []
+    lens = np.array([len(x) for x in logps])
+    N = int(lens.max())
+    E = np.zeros((N, B, 3))
+    for i, x in enumerate(logps):
+        E[:len(x), i] = x
+    neg_cost = -np.asarray(costs, dtype=float)                # (B, from, to)
+    rows = np.arange(B)
+    back = np.zeros((N, B, 3), dtype=np.int8)
+    score = E[0].copy()
+    final = np.where(lens[:, None] == 1, score, 0.0)
+    for t in range(1, N):
+        cand = score[:, :, None] + neg_cost                   # (B, from, to)
+        best = cand.argmax(axis=1)                            # (B, to)
+        back[t] = best
+        score = np.take_along_axis(cand, best[:, None, :], axis=1)[:, 0, :] + E[t]
+        ends = lens - 1 == t
+        if ends.any():
+            final[ends] = score[ends]
+    start = final.argmax(axis=1)
+    cur = np.zeros(B, dtype=np.int64)
+    path = np.zeros((B, N), dtype=np.int8)
+    for t in range(N - 1, -1, -1):
+        begin = lens - 1 == t
+        cur[begin] = start[begin]
+        path[:, t] = cur
+        if t > 0:
+            active = t <= lens - 1
+            cur[active] = back[t, rows[active], cur[active]]
+    return [path[i, :lens[i]] for i in range(B)]
+
+
+def half_segments(logp: np.ndarray, spec, kickoffs):
+    """[(first, last, segment)] per half, with frames before the kickoff forced to D."""
     kick = {k.half: k.frame for k in kickoffs}
+    out = []
     for half, first, last in spec.halves:
         segment = logp[first:last + 1].copy()
         k = kick.get(half, first)
         if k > first:
             segment[:min(k, last + 1) - first, :2] = -np.inf   # dead until the kickoff
             segment[:min(k, last + 1) - first, 2] = 0.0
-        labels[first:last + 1] = STATE_LABELS[viterbi(segment, costs)]
-    return labels
+        out.append((first, last, segment))
+    return out
+
+
+def decode_many(jobs):
+    """jobs: [(logp, spec, kickoffs, DecoderParams)] -> [labels], decoded in one batch."""
+    items, costs, where = [], [], []
+    for j, (logp, spec, kickoffs, params) in enumerate(jobs):
+        for first, last, segment in half_segments(logp, spec, kickoffs):
+            items.append(segment)
+            costs.append(transition_costs(params))
+            where.append((j, first, last))
+    paths = viterbi_batch(items, np.array(costs))
+    out = [np.full(len(job[0]), "X", dtype="<U1") for job in jobs]
+    for (j, first, last), path in zip(where, paths):
+        out[j][first:last + 1] = STATE_LABELS[path]
+    return out
+
+
+def decode(logp: np.ndarray, spec, kickoffs, params: DecoderParams = DecoderParams()) -> np.ndarray:
+    """Labels (H/A/D/X) for the whole video: decoded per half, X outside the halves."""
+    return decode_many([(logp, spec, kickoffs, params)])[0]

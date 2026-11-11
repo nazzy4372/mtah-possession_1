@@ -1,0 +1,16 @@
+# Frozen M5 parameters. Written by `python tasks.py tune`; read by the pipeline (v2).
+# Tuned with Optuna (seeded TPE) on leave-one-game-out predictions of 13 external
+# games under the real-calibrated noise model; median of the top 10 trials.
+# Nothing here was chosen with the provided match or the public 5-minute window.
+model_variant: all
+decoder:
+  c_switch: 7.4614
+  c_die: 11.2073
+  c_restart: 5.5729
+emission:
+  temperature: 1.7665
+  dead_bias: 0.2392
+refine: false
+validation:
+  nested_2fold_spell_f1: 0.3932
+  top_trials_spell_f1: [0.3955, 0.3952, 0.3943, 0.3942, 0.3941, 0.3937, 0.3935, 0.3934, 0.3933, 0.3932]

@@ -77,7 +77,7 @@ def label_tracking(tracking, spec: GameSpec, method: str = "v2", params: Params 
         else:
             from mtah import emission_v2
             logp, dec = emission_v2.emissions(tracking, spec, F), emission_v2.decoder_params()
-            use_refine = emission_v2.load()[1].get("refine", False)
+            use_refine = emission_v2.settings()["refine"]
         raw = decode.decode(logp, spec, kickoffs, dec)
         if use_refine:
             raw = refine.refine(raw, F, spec, params.refine, kickoffs)
