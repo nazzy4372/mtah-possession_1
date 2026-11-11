@@ -51,3 +51,15 @@ def test_report_tool(small_bundle, tmp_path):
     proc = run_tool(TOOLS / "report.py", path, "--spec", small_bundle.path / "game_spec.json")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "possessions" in proc.stdout and pipeline.sha256_of(path) in proc.stdout
+    assert "sanity alarms" in proc.stdout and "warning(s)" in proc.stdout
+
+
+def test_report_alarm_ranges():
+    sys.path.insert(0, str(TOOLS))
+    import report
+
+    good = {"half": 1, "possessions": 150, "mean_possession_s": 12.0, "D_share": 0.38,
+            "home_share_of_alive": 0.6, "possessions_under_0.5s": 1, "X": 0}
+    assert report.alarms([good])["n_warn"] == 0
+    bad = dict(good, possessions=320, D_share=0.6, X=5)
+    assert report.alarms([bad])["n_warn"] == 3
