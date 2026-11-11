@@ -6,6 +6,7 @@
                                                       data bundle -> submission CSV
     python tasks.py validate [F]                      official validator + LF check + SHA-256
     python tasks.py report [F] [--spec S]             aggregate sanity numbers for a submission
+    python tasks.py package --team NAME [F]           <team>.csv + <team>.md for upload, validated
     python tasks.py synthetic [--out D] [--preset small|full] [--seed N]
                                                       write a synthetic bundle in ATD format
     python tasks.py external [--prepare] [--games NAME ...]
@@ -166,6 +167,35 @@ def cmd_external(args):
     return evaluate.main(argv)
 
 
+def cmd_package(args):
+    """Copy the frozen submission and the technical document to the team-named upload files,
+    then run the official validator on the exact CSV that will be uploaded."""
+    import re
+    import shutil
+    from mtah.official import VALIDATE_SCRIPT
+    from mtah.pipeline import sha256_of
+
+    team = args.team.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _.-]*", team):
+        print("team name must be letters, digits, space, '_', '-' or '.'")
+        return 2
+    src = Path(args.file)
+    out_dir = ROOT / "outputs" / "real" / "upload"          # gitignored, like all of outputs/
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv = out_dir / "{}.csv".format(team)
+    doc = out_dir / "{}.md".format(team)
+    shutil.copyfile(src, csv)
+    shutil.copyfile(ROOT / "docs" / "TECHNICAL.md", doc)
+    print("upload files in {}".format(out_dir))
+    code = subprocess.call([sys.executable, str(VALIDATE_SCRIPT), str(csv)])
+    data = csv.read_bytes()
+    has_cr = b"\r" in data
+    digest = sha256_of(csv)
+    print("\nline endings  {}".format("FAIL: contains \\r bytes" if has_cr else "LF only (no \\r)"))
+    print("sha256        {}".format(digest))
+    return code or (1 if has_cr else 0) or _check_sha(digest, _expected_sha("recorded"))
+
+
 def cmd_tune(args):
     from mtah import tune
     argv = ["--variant", args.variant, "--trials", str(args.trials)]
@@ -225,6 +255,11 @@ def main(argv=None):
     p.add_argument("--prepare", action="store_true",
                    help="download (pinned, SHA-256 checked) and convert Metrica + SkillCorner")
     p.set_defaults(func=cmd_external)
+    p = sub.add_parser("package", help="team-named upload files + official validation")
+    p.add_argument("--team", required=True, help="team name exactly as in the registration form")
+    p.add_argument("file", nargs="?", default=str(DEFAULT_OUT))
+    p.set_defaults(func=cmd_package)
+
     p = sub.add_parser("tune", help="Optuna on external out-of-fold predictions -> config/final.yaml")
     p.add_argument("--variant", default="all")
     p.add_argument("--trials", type=int, default=60)
