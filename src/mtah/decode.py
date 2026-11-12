@@ -96,6 +96,75 @@ def viterbi_batch(logps, costs) -> list:
     return [path[i, :lens[i]] for i in range(B)]
 
 
+# transition type of (from, to): 0 switch (H<->A), 1 die (alive->D), 2 restart (D->alive), 3 stay
+TRANSITION_TYPE = np.array([[3, 0, 1], [0, 3, 1], [2, 2, 3]])
+
+
+def viterbi_batch_dyn(logps, base, weight, change_logratio) -> list:
+    """Viterbi with per-frame transition costs driven by a change-point model.
+
+    For item i, entering frame t by a transition of type k (switch, die, restart) costs
+        max(0, base[i, k] - weight[i] * change_logratio[i][t, k])
+    where change_logratio is log(p_k(t) / prior_k) from the change-point model: a likely change
+    makes the transition cheap, an unlikely one makes it dear. weight 0 gives the static decoder
+    (identical paths to viterbi_batch with the same base costs).
+    """
+    B = len(logps)
+    if B == 0:
+        return []
+    lens = np.array([len(x) for x in logps])
+    N = int(lens.max())
+    E = np.zeros((N, B, 3))
+    L = np.zeros((N, B, 3), dtype=np.float32)
+    for i, (x, r) in enumerate(zip(logps, change_logratio)):
+        E[:len(x), i] = x
+        L[:len(x), i] = r
+    base = np.asarray(base, dtype=float)                       # (B, 3)
+    weight = np.asarray(weight, dtype=float)[:, None]          # (B, 1)
+    rows = np.arange(B)
+    back = np.zeros((N, B, 3), dtype=np.int8)
+    score = E[0].copy()
+    final = np.where(lens[:, None] == 1, score, 0.0)
+    padded = np.zeros((B, 4))
+    for t in range(1, N):
+        padded[:, :3] = np.maximum(0.0, base - weight * L[t])
+        cand = score[:, :, None] - padded[:, TRANSITION_TYPE]  # (B, from, to)
+        best = cand.argmax(axis=1)
+        back[t] = best
+        score = np.take_along_axis(cand, best[:, None, :], axis=1)[:, 0, :] + E[t]
+        ends = lens - 1 == t
+        if ends.any():
+            final[ends] = score[ends]
+    start = final.argmax(axis=1)
+    cur = np.zeros(B, dtype=np.int64)
+    path = np.zeros((B, N), dtype=np.int8)
+    for t in range(N - 1, -1, -1):
+        begin = lens - 1 == t
+        cur[begin] = start[begin]
+        path[:, t] = cur
+        if t > 0:
+            active = t <= lens - 1
+            cur[active] = back[t, rows[active], cur[active]]
+    return [path[i, :lens[i]] for i in range(B)]
+
+
+def decode_many_dyn(jobs):
+    """jobs: [(logp, spec, kickoffs, DecoderParams, weight, change_logratio (n_frames, 3))]."""
+    items, base, weights, ratios, where = [], [], [], [], []
+    for j, (logp, spec, kickoffs, params, weight, ratio) in enumerate(jobs):
+        for first, last, segment in half_segments(logp, spec, kickoffs):
+            items.append(segment)
+            base.append((params.c_switch, params.c_die, params.c_restart))
+            weights.append(weight)
+            ratios.append(ratio[first:last + 1])
+            where.append((j, first, last))
+    paths = viterbi_batch_dyn(items, np.array(base), np.array(weights), ratios)
+    out = [np.full(len(job[0]), "X", dtype="<U1") for job in jobs]
+    for (j, first, last), path in zip(where, paths):
+        out[j][first:last + 1] = STATE_LABELS[path]
+    return out
+
+
 def half_segments(logp: np.ndarray, spec, kickoffs):
     """[(first, last, segment)] per half, with frames before the kickoff forced to D."""
     kick = {k.half: k.frame for k in kickoffs}

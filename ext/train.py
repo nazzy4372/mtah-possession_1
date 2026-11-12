@@ -47,23 +47,29 @@ LGB_PARAMS = {
 }
 NUM_ROUNDS = 250
 
+def _m4(names):
+    """The frozen M4 feature set: everything except raw speed and the later touch group."""
+    return [n for n in names if n not in learn_features.GROUP_SPEED_RAW
+            and n not in learn_features.GROUP_TOUCH]
+
+
 VARIANTS = {
-    "all": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW],
-    "noshape": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW
-                              and n not in learn_features.GROUP_SHAPE],
-    "rawspeed": lambda names: [n for n in names if not n.startswith("ps_rank")
-                               and n != "ps_z"],
-    # M5: without the widest (+/-5 s) windows, which may make emissions too slow to follow
-    # short possessions
-    "short": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW
-                            and not n.endswith("_m5")],
+    "all": _m4,
+    "noshape": lambda names: [n for n in _m4(names) if n not in learn_features.GROUP_SHAPE],
+    "rawspeed": lambda names: [n for n in names if not n.startswith("ps_rank") and n != "ps_z"
+                               and n not in learn_features.GROUP_TOUCH],
+    # M5: without the widest (+/-5 s) windows
+    "short": lambda names: [n for n in _m4(names) if not n.endswith("_m5")],
+    # post-M5: plus touch-sequence and ball-kinematics features around the frame
+    "touch": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW],
 }
+FEATURE_VERSION = 2   # bump when learn_features.build changes, so caches are rebuilt
 
 
 # -- feature cache -------------------------------------------------------------------------------
 
 def cache_path(game, condition, seed):
-    return CACHE / "{}_{}_{}.npz".format(game, condition, seed)
+    return CACHE / "{}_{}_{}_v{}.npz".format(game, condition, seed, FEATURE_VERSION)
 
 
 def prepare(game, condition, seed):
@@ -110,10 +116,82 @@ def training_rows(datasets, keep):
     return np.vstack(xs), np.concatenate(ys)
 
 
-def fit(X, y, rounds=NUM_ROUNDS):
+def fit(X, y, rounds=NUM_ROUNDS, num_class=3):
     import lightgbm as lgb
     data = lgb.Dataset(X, label=y, params={"verbosity": -1}, free_raw_data=True)
-    return lgb.train(LGB_PARAMS, data, num_boost_round=rounds)
+    return lgb.train(dict(LGB_PARAMS, num_class=num_class), data, num_boost_round=rounds)
+
+
+# -- change-point model ---------------------------------------------------------------------------
+# A second model answers "does the state change here, and how?" It never decides a label. Its
+# output only makes the decoder's transitions cheaper or dearer frame by frame
+# (decode.viterbi_batch_dyn).
+CHANGE_HALF_WIDTH = 5     # frames either side of a true change that count as "change here"
+CHANGE_NEAR = 25          # every frame this close to a change is kept for training
+CHANGE_CLASSES = ("none", "switch", "die", "restart")
+
+
+def change_targets(gt, half_width=CHANGE_HALF_WIDTH, near_width=CHANGE_NEAR):
+    """(y, near): y per frame is 0 none, 1 switch (H<->A), 2 die (alive->D), 3 restart
+    (D->alive) within +/- half_width frames of a true change; near marks +/- near_width."""
+    n = len(gt)
+    y = np.zeros(n, dtype=np.int64)
+    near = np.zeros(n, dtype=bool)
+    bounds = np.flatnonzero((gt[1:] != gt[:-1]) & (gt[1:] != pm.X) & (gt[:-1] != pm.X)) + 1
+    for b in bounds:
+        kind = 2 if gt[b] == pm.D else 3 if gt[b - 1] == pm.D else 1
+        y[max(0, b - half_width):b + half_width + 1] = kind
+        near[max(0, b - near_width):b + near_width + 1] = True
+    return y, near
+
+
+def change_rows(datasets, keep):
+    """Training rows for the change model: every frame near a change, every SUBSAMPLE-th
+    elsewhere, plus the home/away mirror (the target does not depend on which team is home)."""
+    xs, ys = [], []
+    for d in datasets:
+        names = list(d["names"])
+        cols = [names.index(k) for k in keep]
+        y_all, near = change_targets(d["gt"])
+        idx = np.arange(len(y_all))
+        rows = np.flatnonzero(d["graded"] & (d["gt"] != pm.X) & (near | (idx % SUBSAMPLE == 0)))
+        X = d["X"][rows]
+        xs += [X[:, cols], learn_features.swap_teams(names, X)[:, cols]]
+        ys += [y_all[rows], y_all[rows]]
+    return np.vstack(xs), np.concatenate(ys)
+
+
+def change_logratio(raw, prior):
+    """(n, 3) log(p_k / prior_k) for switch, die, restart."""
+    return (log_softmax(raw)[:, 1:] - np.log(prior[1:])[None, :]).astype(np.float32)
+
+
+def logo_change(variant="touch", verbose=True):
+    """Out-of-fold change log-ratios for every game -> outputs/external/oofc_<variant>.npz."""
+    games = game_list()
+    train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
+    eval_sets = [prepare(g, "full", EVAL_SEED + i) for i, g in enumerate(games)]
+    keep = VARIANTS[variant](list(train_sets[0]["names"]))
+    out = {}
+    for i, g in enumerate(games):
+        started = time.perf_counter()
+        X, y = change_rows([d for j, d in enumerate(train_sets) if j != i], keep)
+        booster = fit(X, y, num_class=4)
+        prior = np.bincount(y, minlength=4).astype(float) / len(y)
+        d = eval_sets[i]
+        names = list(d["names"])
+        Xe = d["X"][d["graded"]][:, [names.index(k) for k in keep]]
+        out[g] = change_logratio(raw_scores(booster, Xe), prior)
+        if verbose:
+            y_true, _ = change_targets(d["gt"])
+            y_true = y_true[d["graded"]]
+            top = [float(np.mean(out[g][y_true == k, k - 1] > 0)) for k in (1, 2, 3)]
+            print("  fold {:<11} {} rows, {:.0f} s; share of true change frames with ratio > 1: "
+                  "switch {:.2f} die {:.2f} restart {:.2f}".format(
+                      g, len(y), time.perf_counter() - started, *top), flush=True)
+    OUT.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(OUT / "oofc_{}.npz".format(variant), **out)
+    return out
 
 
 def raw_scores(booster, X):
@@ -260,6 +338,52 @@ def final(variant, c_switch, c_dead, temperature):
     return 0
 
 
+def _provenance(games, n_rows):
+    import lightgbm as lgb
+    manifests = {name: json.loads((ROOT / "ext" / "manifests" / (name + ".json")).read_text(
+        encoding="utf-8"))["ref"] for name in ("metrica", "skillcorner")}
+    return {"train_games": games, "rows": int(n_rows), "subsample": SUBSAMPLE,
+            "augment_seed_base": TRAIN_SEED, "feature_version": FEATURE_VERSION,
+            "lightgbm": {"version": lgb.__version__, "params": LGB_PARAMS,
+                         "num_boost_round": NUM_ROUNDS},
+            "sources": manifests,
+            "note": "trained only on external games (Metrica open data, SkillCorner open data); "
+                    "nothing from the provided match"}
+
+
+def _write_json(path, data):
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
+        json.dump(data, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def final_v3(variant="touch", with_change=True):
+    """Train the v3 models on every external game: models/emission_v3.* and change_v3.*.
+    Decoding settings are not stored here; they are frozen in config/final_v3.yaml."""
+    games = game_list()
+    train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
+    keep = VARIANTS[variant](list(train_sets[0]["names"]))
+    MODELS.mkdir(exist_ok=True)
+
+    X, y = training_rows(train_sets, keep)
+    fit(X, y).save_model(str(MODELS / "emission_v3.txt"))
+    prior = np.bincount(y, minlength=3)[:3].astype(float) / len(y)
+    _write_json(MODELS / "emission_v3.json", {"features": keep, "prior": prior.tolist(),
+                                              "variant": variant, **_provenance(games, len(y))})
+    print("wrote models/emission_v3.txt ({} features, {} rows)".format(len(keep), len(y)))
+    del X, y
+    if with_change:
+        X, y = change_rows(train_sets, keep)
+        fit(X, y, num_class=4).save_model(str(MODELS / "change_v3.txt"))
+        prior = np.bincount(y, minlength=4).astype(float) / len(y)
+        _write_json(MODELS / "change_v3.json", {
+            "features": keep, "prior": prior.tolist(), "variant": variant,
+            "classes": list(CHANGE_CLASSES), "half_width": CHANGE_HALF_WIDTH,
+            "near_width": CHANGE_NEAR, **_provenance(games, len(y))})
+        print("wrote models/change_v3.txt ({} rows)".format(len(y)))
+    return 0
+
+
 COST_GRID = [(cs, cd) for cs in (4.0, 8.0, 15.0, 25.0) for cd in (8.0, 15.0, 25.0)]
 
 
@@ -267,6 +391,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("cache")
+    p = sub.add_parser("logo-change")
+    p.add_argument("--variant", default="touch", choices=sorted(VARIANTS))
+    p = sub.add_parser("final-v3")
+    p.add_argument("--variant", default="touch", choices=sorted(VARIANTS))
+    p.add_argument("--no-change", action="store_true", help="emission model only")
     p = sub.add_parser("final")
     p.add_argument("--variant", default="all", choices=sorted(VARIANTS))
     p.add_argument("--c-switch", type=float, required=True)
@@ -283,6 +412,13 @@ def main(argv=None):
     p.add_argument("--reuse", action="store_true",
                    help="reuse saved out-of-fold predictions (decoding-only changes)")
     args = parser.parse_args(argv)
+
+    if args.cmd == "final-v3":
+        return final_v3(args.variant, not args.no_change)
+
+    if args.cmd == "logo-change":
+        logo_change(args.variant)
+        return 0
 
     if args.cmd == "final":
         return final(args.variant, args.c_switch, args.c_dead, args.temperature)

@@ -201,6 +201,10 @@ def cmd_tune(args):
     argv = ["--variant", args.variant, "--trials", str(args.trials)]
     if args.nested_only:
         argv.append("--nested-only")
+    if args.change:
+        argv += ["--change", args.change]
+    if args.freeze:
+        argv.append("--freeze")
     return tune.main(argv)
 
 
@@ -264,7 +268,11 @@ def main(argv=None):
     p.add_argument("--variant", default="all")
     p.add_argument("--trials", type=int, default=60)
     p.add_argument("--nested-only", action="store_true",
-                   help="only the nested 2-fold estimate; do not write config/final.yaml")
+                   help="only the nested 2-fold estimate")
+    p.add_argument("--change", metavar="VARIANT",
+                   help="drive transition costs with the change-point model of this variant")
+    p.add_argument("--freeze", action="store_true",
+                   help="write config/final.yaml (without it nothing frozen is touched)")
     p.set_defaults(func=cmd_tune)
 
     args = parser.parse_args(argv)

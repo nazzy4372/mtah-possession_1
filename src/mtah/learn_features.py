@@ -144,6 +144,43 @@ def build(tracking, spec, F=None):
     cols["touch_signed"] = F.last_touch * fade
     cols["since_touch"] = np.clip(np.where(np.isfinite(F.since_touch_s), F.since_touch_s, 120), 0, 120)
 
+    # --- touch sequence around the frame (GROUP_TOUCH): who is on the ball before and after.
+    # A change of possession is a change in this sequence, so the model sees both sides of it.
+    dh = np.nan_to_num(F.d_home, nan=np.inf)
+    da = np.nan_to_num(F.d_away, nan=np.inf)
+    touch = {"home": ((dh < feat.TOUCH_M) & (dh + feat.TOUCH_MARGIN_M < da)).astype(float),
+             "away": ((da < feat.TOUCH_M) & (da + feat.TOUCH_MARGIN_M < dh)).astype(float)}
+    idx = np.arange(n)
+    for tname, mask in touch.items():
+        for w in (1, 3):
+            cols["touch_{}_past{}".format(tname, w)] = _nanroll(mask, s(w), "past")
+            cols["touch_{}_next{}".format(tname, w)] = _nanroll(mask, s(w), "future")
+        last = np.maximum.accumulate(np.where(mask > 0, idx, -1))
+        nxt = np.minimum.accumulate(np.where(mask > 0, idx, 10 ** 9)[::-1])[::-1]
+        cols["since_" + tname] = np.clip(np.where(last >= 0, (idx - last) / fps, 15.0), 0, 15)
+        cols["until_" + tname] = np.clip(np.where(nxt < 10 ** 9, (nxt - idx) / fps, 15.0), 0, 15)
+    cols["touch_delta1"] = (cols["touch_home_next1"] - cols["touch_away_next1"]) \
+        - (cols["touch_home_past1"] - cols["touch_away_past1"])
+    cols["margin_past1"] = _nanroll(margin, s(1), "past")
+    cols["margin_next1"] = _nanroll(margin, s(1), "future")
+    cols["margin_delta1"] = cols["margin_next1"] - cols["margin_past1"]
+
+    # ball kinematics: a kick or a first touch changes the ball's velocity vector
+    k = max(1, s(0.2))
+    v_before = np.full((n, 2), np.nan)
+    v_after = np.full((n, 2), np.nan)
+    v_before[k:] = (F.ball_xy[k:] - F.ball_xy[:-k]) * (fps / float(k))
+    v_after[:-k] = (F.ball_xy[k:] - F.ball_xy[:-k]) * (fps / float(k))
+    kick = np.hypot(v_after[:, 0] - v_before[:, 0], v_after[:, 1] - v_before[:, 1])
+    cols["ball_kick"] = np.clip(kick, 0, 40)
+    cols["ball_kick_max05"] = np.clip(_nanrollmax(kick, s(0.5)), 0, 40)
+    home_dir = np.zeros(n)
+    for half, first, last_f in spec.halves:
+        home_dir[first:last_f + 1] = feat.attack_directions(tracking, spec)[(0, half)]
+    vx = (v_before[:, 0] + v_after[:, 0]) / 2.0
+    cols["ball_vx_home"] = _nanroll(np.clip(vx, -30, 30) * home_dir, s(0.5))
+    cols["ball_adv_home"] = (F.ball_xy[:, 0] - length / 2.0) * home_dir
+
     # --- shape
     cols["shape_diff"] = F.shape_diff
     cols["shape_diff_m2"] = _nanroll(F.shape_diff, s(2))
@@ -178,9 +215,21 @@ def build(tracking, spec, F=None):
 # Mirroring H <-> A: pairs swap columns, signed columns flip sign.
 PAIRS = (("d_home", "d_away"), ("n_home_2", "n_away_2"), ("n_home_5", "n_away_5"),
          ("adv_home", "adv_away"), ("spread_home", "spread_away"),
-         ("tracked_home", "tracked_away"))
+         ("tracked_home", "tracked_away"),
+         ("touch_home_past1", "touch_away_past1"), ("touch_home_next1", "touch_away_next1"),
+         ("touch_home_past3", "touch_away_past3"), ("touch_home_next3", "touch_away_next3"),
+         ("since_home", "since_away"), ("until_home", "until_away"))
 SIGNED = ("margin", "margin_m05", "margin_m1", "margin_m3", "touch_signed", "shape_diff",
-          "shape_diff_m2")
+          "shape_diff_m2", "touch_delta1", "margin_past1", "margin_next1", "margin_delta1",
+          "ball_vx_home", "ball_adv_home")
+
+# Added after M5 (change-of-possession evidence). Kept as a group so the frozen M4 feature set
+# ("all") stays reproducible.
+GROUP_TOUCH = ("touch_home_past1", "touch_away_past1", "touch_home_next1", "touch_away_next1",
+               "touch_home_past3", "touch_away_past3", "touch_home_next3", "touch_away_next3",
+               "since_home", "since_away", "until_home", "until_away", "touch_delta1",
+               "margin_past1", "margin_next1", "margin_delta1", "ball_kick", "ball_kick_max05",
+               "ball_vx_home", "ball_adv_home")
 
 
 def swap_teams(names, X):

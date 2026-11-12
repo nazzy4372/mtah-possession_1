@@ -56,7 +56,12 @@ class Params:
     use_refine: bool = True
 
 
-METHODS = ("v2", "v1", "baseline")
+METHODS = ("v2", "v1", "baseline")      # v3 is added when its model and config are present
+
+
+def methods():
+    from mtah import emission_v3
+    return (("v3",) if emission_v3.available() else ()) + METHODS
 
 
 def label_tracking(tracking, spec: GameSpec, method: str = "v2", params: Params = Params(),
@@ -80,6 +85,18 @@ def label_tracking(tracking, spec: GameSpec, method: str = "v2", params: Params 
             use_refine = emission_v2.settings()["refine"]
         raw = decode.decode(logp, spec, kickoffs, dec)
         if use_refine:
+            raw = refine.refine(raw, F, spec, params.refine, kickoffs)
+    elif method == "v3":
+        from mtah import emission_v3
+        F = features.compute(tracking, spec)
+        logp, ratio = emission_v3.evidence(tracking, spec, F)
+        s = emission_v3.settings()
+        if ratio is None:
+            raw = decode.decode(logp, spec, kickoffs, emission_v3.decoder_params())
+        else:
+            raw = decode.decode_many_dyn([(logp, spec, kickoffs, emission_v3.decoder_params(),
+                                           s["w_change"], ratio)])[0]
+        if s["refine"]:
             raw = refine.refine(raw, F, spec, params.refine, kickoffs)
     else:
         raise ValueError("unknown method {!r}; have {}".format(method, METHODS))

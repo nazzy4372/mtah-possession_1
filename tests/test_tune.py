@@ -23,6 +23,32 @@ def test_batched_viterbi_matches_single_decoder():
         assert np.array_equal(decode.viterbi(s, c), b)
 
 
+def test_dynamic_viterbi_with_zero_weight_equals_static():
+    rng = np.random.default_rng(1)
+    seqs = [rng.normal(0, 1, size=(int(rng.integers(2, 800)), 3)) for _ in range(6)]
+    params = [decode.DecoderParams(*rng.uniform(1, 15, size=3).tolist()) for _ in seqs]
+    static = decode.viterbi_batch(seqs, np.array([decode.transition_costs(p) for p in params]))
+    base = np.array([(p.c_switch, p.c_die, p.c_restart) for p in params])
+    ratios = [rng.normal(0, 2, size=(len(s), 3)).astype(np.float32) for s in seqs]
+    dyn = decode.viterbi_batch_dyn(seqs, base, np.zeros(len(seqs)), ratios)
+    for a, b in zip(static, dyn):
+        assert np.array_equal(a, b)
+
+
+def test_dynamic_viterbi_switches_where_a_change_is_likely():
+    n = 200
+    logp = np.zeros((n, 3))
+    logp[:, 2] = -50.0                        # never dead
+    logp[:100, 0], logp[100:, 1] = 0.05, 0.05  # weak evidence: H then A
+    base = np.array([[20.0, 20.0, 20.0]])
+    flat = np.zeros((n, 3), dtype=np.float32)
+    assert len(set(decode.viterbi_batch_dyn([logp], base, np.array([1.0]), [flat])[0])) == 1
+    cue = flat.copy()
+    cue[100, 0] = 25.0                        # the change model is sure of a switch at frame 100
+    path = decode.viterbi_batch_dyn([logp], base, np.array([1.0]), [cue])[0]
+    assert (path[:100] == decode.H).all() and (path[100:] == decode.A).all()
+
+
 class _Trial:
     def __init__(self, value, params):
         self.value, self.params = value, params

@@ -45,6 +45,8 @@ SPACE = {
     "dead_bias": ("lin", -1.5, 1.5),
     "refine": ("cat", (False, True)),
 }
+# extra dimension when a change-point model drives the transition costs
+SPACE_CHANGE = {"w_change": ("lin", 0.0, 3.0)}
 
 
 def _train_module():
@@ -75,10 +77,27 @@ def emissions(raw, prior, temperature, dead_bias):
     return logp
 
 
-def evaluate_params(param_list, games, eval_sets, oof, prior):
-    """spellF1 per game for each parameter set, decoded in one batch."""
+def load_change(variant):
+    """Out-of-fold change log-ratios per game (ext.train logo-change), or None."""
+    path = OUT / "oofc_{}.npz".format(variant)
+    if not path.is_file():
+        raise FileNotFoundError("{} missing: run python -m ext.train logo-change --variant {}"
+                                .format(path, variant))
+    saved = np.load(path)
+    return {g: saved[g] for g in saved.files}
+
+
+def space_for(change):
+    return dict(SPACE, **SPACE_CHANGE) if change is not None else dict(SPACE)
+
+
+def evaluate_params(param_list, games, eval_sets, oof, prior, change=None):
+    """spellF1 per game for each parameter set, decoded in one batch. With `change` (per-game
+    change log-ratios) the decoder's transition costs follow the change-point model, weighted by
+    each parameter set's w_change."""
     train = _train_module()
     jobs, meta = [], []
+    ratios = {}
     for k, prm in enumerate(param_list):
         dp = decode.DecoderParams(prm["c_switch"], prm["c_die"], prm["c_restart"])
         for g, d in zip(games, eval_sets):
@@ -86,9 +105,17 @@ def evaluate_params(param_list, games, eval_sets, oof, prior):
             logp = np.zeros((spec.n_frames, 3))
             logp[spec.graded_mask()] = emissions(oof[g], prior, prm["temperature"],
                                                  prm["dead_bias"])
-            jobs.append((logp, spec, train.kickoffs_of(d), dp))
+            if change is None:
+                jobs.append((logp, spec, train.kickoffs_of(d), dp))
+            else:
+                if g not in ratios:
+                    full = np.zeros((spec.n_frames, 3), dtype=np.float32)
+                    full[spec.graded_mask()] = change[g]
+                    ratios[g] = full
+                jobs.append((logp, spec, train.kickoffs_of(d), dp, prm.get("w_change", 0.0),
+                             ratios[g]))
             meta.append((k, g, d, spec))
-    labels = decode.decode_many(jobs)
+    labels = decode.decode_many(jobs) if change is None else decode.decode_many_dyn(jobs)
     scores = [dict() for _ in param_list]
     for (k, g, d, spec), lab in zip(meta, labels):
         kos = train.kickoffs_of(d)
@@ -106,9 +133,9 @@ def evaluate_params(param_list, games, eval_sets, oof, prior):
     return scores
 
 
-def _suggest(trial):
+def _suggest(trial, space):
     out = {}
-    for name, spec in SPACE.items():
+    for name, spec in space.items():
         if spec[0] == "log":
             out[name] = trial.suggest_float(name, spec[1], spec[2], log=True)
         elif spec[0] == "lin":
@@ -118,17 +145,18 @@ def _suggest(trial):
     return out
 
 
-def optimise(games, eval_sets, oof, prior, n_trials, seed=0, label=""):
+def optimise(games, eval_sets, oof, prior, n_trials, seed=0, label="", change=None):
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction="maximize",
                                 sampler=optuna.samplers.TPESampler(seed=seed))
+    space = space_for(change)
     done = 0
     while done < n_trials:
         trials = [study.ask() for _ in range(min(ROUND, n_trials - done))]
-        params = [_suggest(t) for t in trials]
+        params = [_suggest(t, space) for t in trials]
         started = time.perf_counter()
-        scores = evaluate_params(params, games, eval_sets, oof, prior)
+        scores = evaluate_params(params, games, eval_sets, oof, prior, change)
         for t, s in zip(trials, scores):
             study.tell(t, float(np.mean([v["spell_f1_mean"] for v in s.values()])))
         done += len(trials)
@@ -137,10 +165,10 @@ def optimise(games, eval_sets, oof, prior, n_trials, seed=0, label=""):
     return study
 
 
-def median_of_top(study, top=TOP):
+def median_of_top(study, top=TOP, space=None):
     ranked = sorted([t for t in study.trials if t.value is not None], key=lambda t: -t.value)[:top]
     out = {}
-    for name, spec in SPACE.items():
+    for name, spec in (space or SPACE).items():
         values = [t.params[name] for t in ranked]
         if spec[0] == "cat":
             out[name] = bool(sum(bool(v) for v in values) * 2 > len(values))
@@ -162,29 +190,38 @@ def _subset(names, games, eval_sets):
     return names, [eval_sets[i] for i in idx]
 
 
-def nested(variant, n_trials):
+def nested(variant, n_trials, change=None):
     games, eval_sets, oof, prior = load_oof(variant)
     fold_a, fold_b = folds(games)
     per_game = {}
     chosen = []
     for tune_on, score_on, name in ((fold_a, fold_b, "A->B"), (fold_b, fold_a, "B->A")):
         g_t, s_t = _subset(tune_on, games, eval_sets)
-        study = optimise(g_t, s_t, oof, prior, n_trials, label=name)
-        params, _ = median_of_top(study)
+        study = optimise(g_t, s_t, oof, prior, n_trials, label=name, change=change)
+        params, _ = median_of_top(study, space=space_for(change))
         chosen.append(params)
         g_s, s_s = _subset(score_on, games, eval_sets)
-        per_game.update(evaluate_params([params], g_s, s_s, oof, prior)[0])
+        per_game.update(evaluate_params([params], g_s, s_s, oof, prior, change)[0])
     mean = float(np.mean([v["spell_f1_mean"] for v in per_game.values()]))
     return mean, per_game, chosen
 
 
-def write_config(params, variant, scores, nested_score, path=CONFIG):
-    """config/final.yaml, written by hand-formatting so the bytes are stable."""
+def config_path(variant):
+    """v2 (variant 'all') is frozen in config/final.yaml; later models get their own file."""
+    return CONFIG if variant == "all" else ROOT / "config" / "final_v3.yaml"
+
+
+def write_config(params, variant, scores, nested_score, path=None):
+    """The frozen settings, written by hand-formatting so the bytes are stable."""
+    path = Path(path) if path else config_path(variant)
     path.parent.mkdir(exist_ok=True)
+    model = "v2" if variant == "all" else "v3"
     lines = [
-        "# Frozen M5 parameters. Written by `python tasks.py tune`; read by the pipeline (v2).",
-        "# Tuned with Optuna (seeded TPE) on leave-one-game-out predictions of 13 external",
-        "# games under the real-calibrated noise model; median of the top {} trials.".format(TOP),
+        "# Frozen decoding parameters for model {}. Written by `python tasks.py tune --freeze`;"
+        .format(model),
+        "# read by the pipeline. Tuned with Optuna (seeded TPE) on leave-one-game-out predictions",
+        "# of 13 external games under the real-calibrated noise model; median of the top {} trials."
+        .format(TOP),
         "# Nothing here was chosen with the provided match or the public 5-minute window.",
         "model_variant: {}".format(variant),
         "decoder:",
@@ -195,6 +232,10 @@ def write_config(params, variant, scores, nested_score, path=CONFIG):
         "  temperature: {:.4f}".format(params["temperature"]),
         "  dead_bias: {:.4f}".format(params["dead_bias"]),
         "refine: {}".format("true" if params["refine"] else "false"),
+    ]
+    if "w_change" in params:
+        lines += ["change:", "  weight: {:.4f}".format(params["w_change"])]
+    lines += [
         "validation:",
         "  nested_2fold_spell_f1: {:.4f}".format(nested_score),
         "  top_trials_spell_f1: [{}]".format(", ".join("{:.4f}".format(s) for s in scores)),
@@ -210,28 +251,35 @@ def main(argv=None):
     parser.add_argument("--variant", default="all")
     parser.add_argument("--trials", type=int, default=60)
     parser.add_argument("--nested-only", action="store_true")
+    parser.add_argument("--change", metavar="VARIANT",
+                        help="use the change-point model's out-of-fold output for this variant")
+    parser.add_argument("--freeze", action="store_true",
+                        help="write config/final.yaml (otherwise results go to outputs/ only)")
     args = parser.parse_args(argv)
+    change = load_change(args.change) if args.change else None
+    tag = args.variant + ("+change" if change is not None else "")
 
-    print("nested 2-fold estimate, variant {}".format(args.variant), flush=True)
-    nested_score, per_game, chosen = nested(args.variant, args.trials)
+    print("nested 2-fold estimate, variant {}".format(tag), flush=True)
+    nested_score, per_game, chosen = nested(args.variant, args.trials, change)
     print("nested spellF1 {:.4f}".format(nested_score))
     for g, v in per_game.items():
         print("  {:<11} {:.4f}  poss/gt {:.2f}".format(g, v["spell_f1_mean"], v["poss_ratio"]))
-    result = {"variant": args.variant, "nested_spell_f1": nested_score, "per_game": per_game,
+    result = {"variant": tag, "nested_spell_f1": nested_score, "per_game": per_game,
               "fold_params": chosen}
     if not args.nested_only:
         games, eval_sets, oof, prior = load_oof(args.variant)
-        study = optimise(games, eval_sets, oof, prior, args.trials, label="all")
-        params, top_scores = median_of_top(study)
-        frozen = evaluate_params([params], games, eval_sets, oof, prior)[0]
+        study = optimise(games, eval_sets, oof, prior, args.trials, label="all", change=change)
+        params, top_scores = median_of_top(study, space=space_for(change))
+        frozen = evaluate_params([params], games, eval_sets, oof, prior, change)[0]
         print("frozen (median of top {}): {}".format(TOP, json.dumps(params)))
         print("frozen params on all 13 (tuned on them, optimistic): {:.4f}".format(
             np.mean([v["spell_f1_mean"] for v in frozen.values()])))
-        write_config(params, args.variant, top_scores, nested_score)
         result.update({"frozen": params, "frozen_per_game": frozen, "top_scores": top_scores})
-        print("wrote {}".format(CONFIG))
+        if args.freeze:
+            write_config(params, args.variant, top_scores, nested_score)
+            print("wrote {}".format(config_path(args.variant)))
     OUT.mkdir(parents=True, exist_ok=True)
-    with open(OUT / "tune_{}.json".format(args.variant), "w", encoding="utf-8",
+    with open(OUT / "tune_{}.json".format(tag.replace("+", "_")), "w", encoding="utf-8",
               newline="\n") as handle:
         json.dump(result, handle, indent=2, sort_keys=True)
         handle.write("\n")
