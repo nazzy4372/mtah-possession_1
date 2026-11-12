@@ -46,7 +46,9 @@ SPACE = {
     "refine": ("cat", (False, True)),
 }
 # extra dimension when a change-point model drives the transition costs
-SPACE_CHANGE = {"w_change": ("lin", 0.0, 3.0)}
+# Searches over 0-3 and 0-8 both ended at their upper edge: with a large weight the change model
+# acts as a gate (a transition is cheap only where a change is flagged). 25 covers that regime.
+SPACE_CHANGE = {"w_change": ("lin", 0.0, 25.0)}
 
 
 def _train_module():

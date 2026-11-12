@@ -64,10 +64,16 @@ def methods():
     return (("v3",) if emission_v3.available() else ()) + METHODS
 
 
-def label_tracking(tracking, spec: GameSpec, method: str = "v2", params: Params = Params(),
+def default_method() -> str:
+    """The newest frozen model: v3 when its model and config are present, else v2."""
+    return methods()[0]
+
+
+def label_tracking(tracking, spec: GameSpec, method: str = None, params: Params = Params(),
                    kickoffs=None):
     """(labels, kickoffs) for an in-memory Tracking. The evaluation harness calls this directly so
     it can corrupt a Tracking (ball dropout) before labelling."""
+    method = method or default_method()
     if kickoffs is None:
         kickoffs = halves.detect_kickoffs(tracking, spec)
         if not all(k.consistent for k in kickoffs):
@@ -105,7 +111,8 @@ def label_tracking(tracking, spec: GameSpec, method: str = "v2", params: Params 
     return labels, kickoffs
 
 
-def run(data_dir, spec: GameSpec, method: str = "v2", params: Params = Params()) -> RunResult:
+def run(data_dir, spec: GameSpec, method: str = None, params: Params = Params()) -> RunResult:
+    method = method or default_method()
     timings = {}
     t0 = time.perf_counter()
     tracking = io_atd.load_game(data_dir, spec)

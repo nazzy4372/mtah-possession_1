@@ -17,7 +17,7 @@ def score(gt_path, labels):
     return pm.evaluate(gt, pm.label_codes(labels))
 
 
-@pytest.mark.parametrize("method", pipeline.METHODS)
+@pytest.mark.parametrize("method", pipeline.methods())
 def test_small_match_end_to_end(small_bundle, tmp_path, method):
     spec = small_bundle.spec
     result = pipeline.run(small_bundle.path, spec, method=method)

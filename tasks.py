@@ -42,6 +42,9 @@ def _expected_sha(value):
         return None
     if value == "recorded":
         return RECORDED_SHA.read_text(encoding="utf-8").split()[0].lower()
+    if value == "recorded-v2":
+        return (ROOT / "config" / "submission_v2.sha256").read_text(
+            encoding="utf-8").split()[0].lower()
     return value.lower()
 
 
@@ -75,6 +78,7 @@ def cmd_submission(args):
         print("no data directory: pass --data-dir or set MTAH_DATA_DIR")
         return 2
     spec = _spec(args.spec)
+    args.method = args.method or pipeline.default_method()
     started = time.perf_counter()
     try:
         result = pipeline.run(data_dir, spec, method=args.method)
@@ -87,13 +91,14 @@ def cmd_submission(args):
 
     # Aggregates only: this runs on the real match, and its output may be shared.
     print("game        {}  ({} frames), method {}".format(spec.name, spec.n_frames, args.method))
-    if args.method == "v2":
-        from mtah import emission_v2
-        s = emission_v2.settings()
+    if args.method in ("v2", "v3"):
+        from mtah import emission_v2, emission_v3
+        s = (emission_v3 if args.method == "v3" else emission_v2).settings()
         print("settings    from {}: c_switch {:.2f} c_die {:.2f} c_restart {:.2f} temperature "
-              "{:.2f} dead_bias {:+.2f} refine {}".format(
+              "{:.2f} dead_bias {:+.2f} refine {}{}".format(
                   s["source"], s["c_switch"], s["c_die"], s["c_restart"], s["temperature"],
-                  s["dead_bias"], s["refine"]))
+                  s["dead_bias"], s["refine"],
+                  " change weight {:.2f}".format(s["w_change"]) if s.get("w_change") else ""))
     for kickoff in result.kickoffs:
         print("kickoff     {}".format(kickoff.describe(spec.fps)))
         for window, values in kickoff.diagnostics.items():
@@ -230,8 +235,9 @@ def main(argv=None):
     p.add_argument("--spec", help="game_spec.json for a non-BAR-ATH bundle")
     p.add_argument("--expect-sha256", metavar="HEX|recorded",
                    help="fail unless the file has this SHA-256 ('recorded' = the frozen one)")
-    p.add_argument("--method", default="v2", choices=("v2", "v1", "baseline"),
-                   help="v2 (learned emissions + decoder, default), v1 (rules + decoder) or the "
+    p.add_argument("--method", choices=("v3", "v2", "v1", "baseline"),
+                   help="default: the newest frozen model (v3: v2 plus touch-sequence features). "
+                        "v2 reproduces the earlier frozen file; v1 is the rules; baseline is the "
                         "ported upstream baseline")
     p.set_defaults(func=cmd_submission)
 
