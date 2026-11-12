@@ -29,7 +29,22 @@ def main(argv=None):
                         help="also print the scorer's detail block: frame accuracy, confusion "
                              "matrix (GT x ours) and per-class precision/recall on the graded "
                              "frames of the public window")
+    parser.add_argument("--force", action="store_true",
+                        help="score a file other than the one already checked (logs a new look)")
     args = parser.parse_args(argv)
+
+    # The window was used on the frozen v2 file only (docs/public_window_log.md). Scoring another
+    # version would make it a way of choosing between versions, which the rules forbid.
+    import hashlib
+    digest = hashlib.sha256(Path(args.file).read_bytes()).hexdigest()
+    checked = (ROOT / "config" / "submission_v2.sha256").read_text(encoding="utf-8").split()[0]
+    if digest != checked and not args.force:
+        print("REFUSED: {} is not the file the public window was checked on (v2, {}...).\n"
+              "The public 5 minutes are a correctness check only and must not be used to compare "
+              "versions.\nSee docs/public_window_log.md. To check alignment of a new version "
+              "without ground truth, use tools/compare_submissions.py.".format(
+                  Path(args.file).name, checked[:8]))
+        return 2
     work = ROOT / "outputs" / "real" / "public_check"
     results = work / "results"
     if results.exists():

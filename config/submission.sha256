@@ -1,4 +1,5 @@
-6ad9d4addca4cc8da84292254678682215e433888e534f7eb2f016d7f46d92e1  outputs/real/submission.csv
-# SHA-256 of the frozen submission (M5: model emission_v2, config/final.yaml), from
+f6fb5445851627e4dcf5e512fdcf282984c3d7461d311772ac52e4b965fddce9  outputs/real/submission.csv
+# SHA-256 of the frozen submission (model v3: models/emission_v3.txt, config/final_v3.yaml), from
 # `python tasks.py submission` on the official BAR-ATH data bundle. A hash reveals nothing about
 # the labels. `python tasks.py submission --expect-sha256 recorded` checks a rerun against it.
+# The earlier v2 file's hash is in submission_v2.sha256.

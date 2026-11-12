@@ -2,7 +2,7 @@
 
 **Team Nuttertools.** More than a Hack 2027, Phase 1. Match: FC Barcelona (H) vs Athletic Club (A).
 Code: this repository; every command is listed in section 8. Submission file: `Nuttertools.csv`,
-produced by model v3 (SHA-256 in `config/submission.sha256`).
+produced by model v3 (SHA-256 `f6fb5445851627e4dcf5e512fdcf282984c3d7461d311772ac52e4b965fddce9`).
 
 ## 1. Approach, and why
 
@@ -153,15 +153,21 @@ Under the realistic noise, the ported baseline scores 0.18–0.23, close to
 its published full-match score on the real game (0.243). The noise model was never tuned to that
 number, so the closeness is independent evidence that the noise model is realistic.
 
-**Real match: sanity alarms only** (no labels; ranges fixed before any check):
+**Real match: sanity alarms only** (no labels; ranges fixed before any check). Submitted file, v3:
 
 | alarm | half 1 | half 2 | range | |
 |---|---|---|---|---|
-| possessions | 152 | 151 | 100–200 | pass |
-| mean possession | 13.8 s | 12.8 s | 5–25 s | pass |
-| dead-ball share | 33.8% | 39.1% | 25–50% | pass |
-| Barcelona share of ball-in-play | 59.9% | 58.8% | 45–75% | pass |
+| possessions | 153 | 144 | 100–200 | pass |
+| mean possession | 13.2 s | 13.4 s | 5–25 s | pass |
+| dead-ball share | 36.4% | 39.4% | 25–50% | pass |
+| Barcelona share of ball-in-play | 61.3% | 58.8% | 45–75% | pass |
 | possessions under 0.5 s; X on graded frames | 0; 0 | 0; 0 | ≤5%; 0 | pass |
+
+**v3 against v2 on the real match, without ground truth** (`tools/compare_submissions.py`): the two
+files give the same label on 91.8% of the 158,857 graded frames, the same alive/dead call on 96.2%,
+and the same team on 92.7% of frames both call alive. They report 297 and 303 possessions, and
+`X` sits on exactly the same frames. The new model changes labels around changes of state, not
+the alignment or meaning of the file.
 
 **Public window (correctness check of the pipeline, on the frozen v2 file):** v2 scores macroF1
 **0.783** and spellF1 **0.513** on the public 5 minutes. Frame accuracy is 0.814, the alive/dead F1
