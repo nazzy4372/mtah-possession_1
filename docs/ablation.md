@@ -106,6 +106,23 @@ spellF1 depends on the search range for its weight (+0.006, +0.012, then −0.00
 touch-only), which is not a robust gain. The acceptance rule, set before the test, was a clear win
 on most games on the nested estimate. It failed, so v3 ships without it. The code is kept and tested.
 
+**Emphasising frames near changes in training: tried, not shipped.** spellF1 is decided at the
+changes of state, which are a small share of frames. Two training variants on the v3 features
+(`ext/train.py`, `TRAINING`):
+
+| variant | spellF1 at equal decoder settings | nested 2-fold | against v3, per game (nested) |
+|---|---|---|---|
+| v3 (every 5th frame, equal weights) | 0.4195 | 0.4168 | |
+| `touch_w3`: frames within ±1 s of a change weighted ×3 | 0.4246 | not run | better on 9 of 13 at equal settings |
+| `touch_dense`: every frame within ±1 s of a change kept | 0.4282 | 0.4234 | better on 9 of 13, mean +0.007, paired t = 1.2 |
+
+The predicted possession count moves toward the truth (0.61 → 0.67 of it), and all three Metrica
+games improve (+0.024 to +0.037 nested). But SkillCorner is unchanged on average, with four
+games down by 0.016–0.022, and the overall gain is within noise. By the rule fixed beforehand (a
+clear win on most games on the nested estimate) it is not adopted. The Metrica-only gain is noted
+as a lead, not as evidence: choosing by a subset of games after seeing the results would be
+selection, not validation.
+
 v3's frozen decoding settings are in `config/final_v3.yaml` (switch 5.01, die 12.86, restart 6.04,
 temperature 1.87, dead-ball bias +0.38, no refinement). The predicted possession count is still
 0.56–0.78 of the truth per game: the touch features place boundaries better, but do not recover

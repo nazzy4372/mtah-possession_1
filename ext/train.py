@@ -100,25 +100,54 @@ def game_list():
 
 # -- model ---------------------------------------------------------------------------------------
 
-def training_rows(datasets, keep):
-    """Subsampled graded rows of several games, plus the H <-> A mirrored copy."""
-    xs, ys = [], []
+# Training-set variants that emphasise frames near a true change of state (within CHANGE_NEAR
+# frames). spellF1 is decided at the changes, but they are a small share of all frames.
+#   name -> (feature variant, weight on near-change frames, keep every near-change frame)
+TRAINING = {
+    "touch_w3": ("touch", 3.0, False),      # every 5th frame as usual, near-change frames x3
+    "touch_dense": ("touch", 1.0, True),    # every near-change frame, every 5th elsewhere
+}
+
+
+def resolve(variant):
+    """(feature variant, near-change weight, dense near changes) for a training variant name."""
+    return TRAINING.get(variant, (variant, 1.0, False))
+
+
+def all_variants():
+    return sorted(VARIANTS) + sorted(TRAINING)
+
+
+def training_rows(datasets, keep, near_weight=1.0, dense=False):
+    """(X, y, weights or None): subsampled graded rows of several games plus the H <-> A mirrored
+    copy. With near_weight > 1 or dense, frames near a true change count for more."""
+    xs, ys, ws = [], [], []
+    emphasise = near_weight != 1.0 or dense
     for d in datasets:
         names = list(d["names"])
         cols = [names.index(k) for k in keep]
-        rows = np.flatnonzero(d["graded"] & (d["gt"] != pm.X))[::SUBSAMPLE]
+        usable = d["graded"] & (d["gt"] != pm.X)
+        if emphasise:
+            _, near = change_targets(d["gt"])
+            idx = np.arange(len(usable))
+            pick = usable & ((idx % SUBSAMPLE == 0) | near) if dense else None
+            rows = np.flatnonzero(pick) if dense else np.flatnonzero(usable)[::SUBSAMPLE]
+            w = np.where(near[rows], near_weight, 1.0)
+            ws += [w, w]
+        else:
+            rows = np.flatnonzero(usable)[::SUBSAMPLE]
         X = d["X"][rows]
         y = d["gt"][rows].astype(np.int64)
         X_sw = learn_features.swap_teams(names, X)
         y_sw = np.where(y == pm.H, pm.A, np.where(y == pm.A, pm.H, y))
         xs += [X[:, cols], X_sw[:, cols]]
         ys += [y, y_sw]
-    return np.vstack(xs), np.concatenate(ys)
+    return np.vstack(xs), np.concatenate(ys), (np.concatenate(ws) if emphasise else None)
 
 
-def fit(X, y, rounds=NUM_ROUNDS, num_class=3):
+def fit(X, y, rounds=NUM_ROUNDS, num_class=3, weight=None):
     import lightgbm as lgb
-    data = lgb.Dataset(X, label=y, params={"verbosity": -1}, free_raw_data=True)
+    data = lgb.Dataset(X, label=y, weight=weight, params={"verbosity": -1}, free_raw_data=True)
     return lgb.train(dict(LGB_PARAMS, num_class=num_class), data, num_boost_round=rounds)
 
 
@@ -264,12 +293,14 @@ def logo(variant="all", verbose=True):
     games = game_list()
     train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
     eval_sets = [prepare(g, "full", EVAL_SEED + i) for i, g in enumerate(games)]
-    keep = VARIANTS[variant](list(train_sets[0]["names"]))
+    feature_variant, near_weight, dense = resolve(variant)
+    keep = VARIANTS[feature_variant](list(train_sets[0]["names"]))
     oof = {}
     for i, g in enumerate(games):
         started = time.perf_counter()
-        X, y = training_rows([d for j, d in enumerate(train_sets) if j != i], keep)
-        booster = fit(X, y)
+        X, y, w = training_rows([d for j, d in enumerate(train_sets) if j != i], keep,
+                                near_weight, dense)
+        booster = fit(X, y, weight=w)
         d = eval_sets[i]
         names = list(d["names"])
         Xe = d["X"][d["graded"]][:, [names.index(k) for k in keep]]
@@ -312,7 +343,7 @@ def final(variant, c_switch, c_dead, temperature):
     games = game_list()
     train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
     keep = VARIANTS[variant](list(train_sets[0]["names"]))
-    X, y = training_rows(train_sets, keep)
+    X, y, _ = training_rows(train_sets, keep)
     booster = fit(X, y)
     prior = np.bincount(y, minlength=3)[:3].astype(float)
     prior /= prior.sum()
@@ -362,14 +393,25 @@ def final_v3(variant="touch", with_change=False):
     Decoding settings are not stored here; they are frozen in config/final_v3.yaml."""
     games = game_list()
     train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
-    keep = VARIANTS[variant](list(train_sets[0]["names"]))
+    feature_variant, near_weight, dense = resolve(variant)
+    keep = VARIANTS[feature_variant](list(train_sets[0]["names"]))
     MODELS.mkdir(exist_ok=True)
 
-    X, y = training_rows(train_sets, keep)
-    fit(X, y).save_model(str(MODELS / "emission_v3.txt"))
-    prior = np.bincount(y, minlength=3)[:3].astype(float) / len(y)
-    _write_json(MODELS / "emission_v3.json", {"features": keep, "prior": prior.tolist(),
-                                              "variant": variant, **_provenance(games, len(y))})
+    X, y, w = training_rows(train_sets, keep, near_weight, dense)
+    fit(X, y, weight=w).save_model(str(MODELS / "emission_v3.txt"))
+    if w is None:
+        prior = np.bincount(y, minlength=3)[:3].astype(float) / len(y)
+    else:
+        # emphasised sampling distorts the class shares; use the true shares of all graded
+        # frames (made symmetric in H and A, as the mirrored training copy is)
+        prior = np.bincount(np.concatenate([d["gt"][d["graded"] & (d["gt"] != pm.X)]
+                                            for d in train_sets]), minlength=3)[:3].astype(float)
+        prior = (prior + prior[[1, 0, 2]]) / 2.0
+        prior /= prior.sum()
+    _write_json(MODELS / "emission_v3.json", {
+        "features": keep, "prior": prior.tolist(), "variant": variant,
+        "near_change_weight": near_weight, "dense_near_changes": dense,
+        **_provenance(games, len(y))})
     print("wrote models/emission_v3.txt ({} features, {} rows)".format(len(keep), len(y)))
     del X, y
     if with_change:
@@ -392,20 +434,20 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("cache")
     p = sub.add_parser("logo-change")
-    p.add_argument("--variant", default="touch", choices=sorted(VARIANTS))
+    p.add_argument("--variant", default="touch", choices=all_variants())
     p = sub.add_parser("final-v3")
-    p.add_argument("--variant", default="touch", choices=sorted(VARIANTS))
+    p.add_argument("--variant", default="touch", choices=all_variants())
     p.add_argument("--with-change", action="store_true",
                    help="also train the change-point model (an experiment that is not shipped: "
                         "its gain was not robust, see docs/ablation.md)")
     p = sub.add_parser("final")
-    p.add_argument("--variant", default="all", choices=sorted(VARIANTS))
+    p.add_argument("--variant", default="all", choices=all_variants())
     p.add_argument("--c-switch", type=float, required=True)
     p.add_argument("--c-dead", type=float, required=True)
     p.add_argument("--temperature", type=float, required=True,
                    help="from the out-of-fold calibration of the same variant (logo_<v>.json)")
     p = sub.add_parser("logo")
-    p.add_argument("--variant", default="all", choices=sorted(VARIANTS))
+    p.add_argument("--variant", default="all", choices=all_variants())
     p.add_argument("--grid", action="store_true", help="also grid the decoder costs on OOF")
     p.add_argument("--c-switch", type=float)
     p.add_argument("--c-dead", type=float)
@@ -440,7 +482,7 @@ def main(argv=None):
         saved = np.load(oof_file)
         oof = {g: saved[g] for g in games}
         prior, temperature = saved["prior"], float(saved["temperature"])
-        keep = VARIANTS[args.variant](list(eval_sets[0]["names"]))
+        keep = VARIANTS[resolve(args.variant)[0]](list(eval_sets[0]["names"]))
         print("variant {}: reusing out-of-fold predictions".format(args.variant), flush=True)
     else:
         games, eval_sets, oof, prior, keep = logo(args.variant)
