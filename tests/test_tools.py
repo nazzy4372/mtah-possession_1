@@ -54,6 +54,21 @@ def test_report_tool(small_bundle, tmp_path):
     assert "sanity alarms" in proc.stdout and "warning(s)" in proc.stdout
 
 
+def test_compare_submissions_tool(small_bundle, tmp_path):
+    paths = []
+    for method in ("v2", "baseline"):
+        result = pipeline.run(small_bundle.path, small_bundle.spec, method=method)
+        paths.append(tmp_path / "{}.csv".format(method))
+        pipeline.write_submission(paths[-1], result.labels)
+    proc = run_tool(TOOLS / "compare_submissions.py", paths[0], paths[1],
+                    "--spec", small_bundle.path / "game_spec.json")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "same label" in proc.stdout and "X placement differs on      0 frames" in proc.stdout
+    same = run_tool(TOOLS / "compare_submissions.py", paths[0], paths[0],
+                    "--spec", small_bundle.path / "game_spec.json")
+    assert "same label                  1.0000" in same.stdout
+
+
 def test_report_alarm_ranges():
     sys.path.insert(0, str(TOOLS))
     import report

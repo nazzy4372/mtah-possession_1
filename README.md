@@ -9,10 +9,11 @@ imported and never modified.
 Each half is then decoded with a Viterbi decoder that charges for every switch, which stops
 flicker without merging possessions. The model is trained only on noise-augmented external games
 (Metrica and SkillCorner open data) and shipped in `models/`. The decoding settings were tuned with
-Optuna on held-out external predictions and frozen in `config/final.yaml`. Leave-one-game-out
-spellF1 on 13 external games is 0.393 (nested estimate), against 0.301 for our rules and 0.189 for
-the ported upstream baseline (`docs/ablation.md`). External data and labels:
-`docs/label_derivation.md`.
+Optuna on held-out external predictions and frozen in `config/final_v3.yaml`. Leave-one-game-out
+spellF1 on 13 external games is 0.417 (nested estimate) for the shipped model v3, against 0.393
+for the earlier v2, 0.301 for our rules and 0.189 for the ported upstream baseline
+(`docs/ablation.md`). External data and labels: `docs/label_derivation.md`. Full write-up:
+`docs/TECHNICAL.md`.
 
 ## Reproduce the submission (Windows Command Prompt, Python 3.11)
 
@@ -28,9 +29,11 @@ py -3.11 -m venv .venv
 .venv\Scripts\python.exe tasks.py validate --expect-sha256 recorded
 ```
 
-`submission` writes `outputs\real\submission.csv` (LF line endings) in about 15 s. With
+`submission` writes `outputs\real\submission.csv` (LF line endings) in about 20–50 s. With
 `--expect-sha256 recorded` it fails unless the bytes equal the frozen file, whose SHA-256 is in
-`config/submission.sha256`. Everything that determines the output is pinned:
+`config/submission.sha256`. The default method is the newest frozen model (v3); the earlier one is
+reproduced with `--method v2 --expect-sha256 recorded-v2`. Everything that determines the output
+is pinned:
 - `requirements.txt`, with the full dependency closure;
 - the upstream submodule commit;
 - the model file (stored byte-exact);
@@ -58,12 +61,13 @@ Retraining the model from scratch, all from external data:
 ```
 .venv\Scripts\python.exe tasks.py external --prepare
 .venv\Scripts\python.exe -m ext.train cache
-.venv\Scripts\python.exe -m ext.train logo --variant all
-.venv\Scripts\python.exe -m ext.train final --variant all --c-switch 15 --c-dead 25 --temperature 1.0
-.venv\Scripts\python.exe tasks.py tune
+.venv\Scripts\python.exe -m ext.train logo --variant touch
+.venv\Scripts\python.exe -m ext.train final-v3 --variant touch
+.venv\Scripts\python.exe tasks.py tune --variant touch --freeze
 ```
 
-The last two steps reproduce `models/emission_v2.txt` byte for byte and rewrite `config/final.yaml`.
+The last two steps reproduce `models/emission_v3.txt` byte for byte and rewrite
+`config/final_v3.yaml`.
 
 ## Layout
 
@@ -73,10 +77,12 @@ src/mtah/      io_atd (fast ATD parser), halves (kickoff detection, graded-frame
                decode (Viterbi), refine, pipeline, tune, synthetic, official (upstream imports)
 ext/           external data: pinned download, Metrica + SkillCorner converters, noise model,
                evaluation harness, training
-models/        emission_v2.txt (LightGBM) + emission_v2.json (features, provenance)
-config/        final.yaml (frozen decoding settings), submission.sha256 (frozen output hash)
+models/        emission_v3.txt (shipped LightGBM model) + .json (features, provenance);
+               emission_v2.* (the earlier frozen model)
+config/        final_v3.yaml (frozen decoding settings), submission.sha256 (frozen output hash);
+               final.yaml and submission_v2.sha256 for the earlier v2
 tools/         check_setup, inspect_schema, real_stats, feature_stats, kickoff_diag, report,
-               parity_baseline (all print aggregates only)
+               parity_baseline, compare_submissions, public_check (all print aggregates only)
 tests/         unit + end-to-end tests on synthetic matches
 docs/          label_derivation.md, ablation.md, public_window_log.md
 ```

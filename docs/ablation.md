@@ -70,3 +70,43 @@ Findings:
   would have to come from sharper team evidence at changes of control.
 - **Wide windows are not the cause.** Retraining without the ±5 s windows (variant `short`)
   scores the same (0.3941 vs 0.3947 at the M4 settings), so the shipped `all` model is kept.
+
+# Model v3: change-of-possession evidence (after M5)
+
+An error analysis of v2 on the external out-of-fold predictions (no data from the provided match):
+
+| | true | predicted | matched within ±1 s |
+|---|---|---|---|
+| team changes (H ↔ A) | 3,069 | 1,567 | 15% of the true ones |
+| ball dies (alive → D) | 1,333 | 1,359 | 43% |
+| restarts (D → alive) | 1,331 | 1,356 | 53% |
+
+- There is **no systematic lag** (median 0 to −1 frames), so a constant boundary shift cannot help.
+- The loss is in team changes. Possessions shorter than 3 s are a third of all true possessions
+  and v2 matches 6% of them; longer ones are matched 46% of the time.
+
+**Touch features** (`learn_features.GROUP_TOUCH`, 20 features, variant `touch`): for each team, the
+share of frames on the ball in the 1 s and 3 s before and after the frame, the time since its last
+touch and until its next one, the before/after difference of touch and proximity margin, the size
+of the ball's velocity change (a kick or first touch), and the ball's speed and position along the
+home team's attacking direction. All are mirrored when home and away are swapped.
+
+| variant (leave-one-game-out, `full` noise) | nested 2-fold spellF1 | note |
+|---|---|---|
+| v2 (39 features), frozen in M5 | 0.3932 | |
+| **v3: v2 + touch features (shipped)** | **0.4168** | better on 11 of 13 games at equal decoder settings (0.4195 vs 0.3947); the two losses are −0.002 and −0.004 |
+| v3 + change-point model, weight searched in 0–3 | 0.4226 | weight at the upper edge |
+| v3 + change-point model, weight searched in 0–8 | 0.4289 | weight at the upper edge |
+| v3 + change-point model, weight searched in 0–25 | 0.4125 | below touch-only |
+
+**Change-point model: tried, not shipped.** A second LightGBM model predicts whether a switch, a
+stoppage or a restart happens within ±5 frames, and the decoder's transition costs follow it
+(`decode.viterbi_batch_dyn`). Out of fold it flags 80–87% of true switch frames. But its effect on
+spellF1 depends on the search range for its weight (+0.006, +0.012, then −0.004 against
+touch-only), which is not a robust gain. The acceptance rule, set before the test, was a clear win
+on most games on the nested estimate. It failed, so v3 ships without it. The code is kept and tested.
+
+v3's frozen decoding settings are in `config/final_v3.yaml` (switch 5.01, die 12.86, restart 6.04,
+temperature 1.87, dead-ball bias +0.38, no refinement). The predicted possession count is still
+0.56–0.78 of the truth per game: the touch features place boundaries better, but do not recover
+most of the missed short possessions.

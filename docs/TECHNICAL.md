@@ -1,8 +1,8 @@
 # Ball possession from automatic tracking: technical document
 
 **Team Nuttertools.** More than a Hack 2027, Phase 1. Match: FC Barcelona (H) vs Athletic Club (A).
-Code: this repository; every command is listed in section 8. Submission file: `Nuttertools.csv`
-(SHA-256 `6ad9d4addca4cc8da84292254678682215e433888e534f7eb2f016d7f46d92e1`).
+Code: this repository; every command is listed in section 8. Submission file: `Nuttertools.csv`,
+produced by model v3 (SHA-256 in `config/submission.sha256`).
 
 ## 1. Approach, and why
 
@@ -15,9 +15,11 @@ prices every change of state**:
    reader on all 199,319 frames).
 2. **Detect each kickoff** from the tracking (section 4). Frames before it inside a graded half are
    dead ball; ungraded frames are `X`.
-3. **Per-frame evidence.** 39 collective, identity-free features: relative player speed, ball
-   speed and position, proximity of each team to the ball, last touch, team shape, all with rolling
-   windows. A small LightGBM model maps them to p(H, A, D).
+3. **Per-frame evidence.** 59 collective, identity-free features: relative player speed, ball
+   speed and position, proximity of each team to the ball, team shape, and the **touch sequence
+   around the frame**: which team is on the ball in the seconds before and after, and whether
+   the ball's velocity has just changed. Most have rolling windows. A small LightGBM model maps
+   them to p(H, A, D).
 4. **Decode** each half with a Viterbi decoder over {H, A, D}. Switching team costs `c_switch`,
    the ball dying costs `c_die`, a restart costs `c_restart`. A change of state happens only when
    the evidence for it, summed over its frames, outweighs its cost. This is our reading of
@@ -109,15 +111,22 @@ alive) is 0.43, against an estimated 0.34 / 0.45 on the real match.
   never reimplemented.
 - **Tuning** (Optuna, seeded TPE, 60 trials) of the decoder costs, emission temperature, dead-ball
   bias and boundary refinement, on the out-of-fold predictions only. The frozen parameters are the
-  median of the top 10 trials (`config/final.yaml`). The honest estimate is a **nested 2-fold**
+  median of the top 10 trials (`config/final_v3.yaml`). The honest estimate is a **nested 2-fold**
   (tune on half the games, score the other half, swap).
+- **Two versions were frozen.** v2 (39 features) came first. An error analysis of v2 on the
+  external out-of-fold predictions then showed that the loss was in changes of possession, which
+  led to the touch-sequence features of v3. v3 was accepted on the external games alone, by a
+  rule fixed beforehand (a clear win on most games on the nested estimate). v2 stays reproducible
+  with `--method v2`.
 - **The provided match was never used to choose anything.** Only label-free aggregates of its
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
 - **Public 5-minute window:** used as a correctness check only, after everything was frozen, and
-  looked at **twice**, both times on the frozen file: the scoreboard, then its frame-level
-  breakdown. One earlier run scored only the upstream baselines, to test the tool. See section 6
-  and `docs/public_window_log.md`.
+  looked at **twice**, both times on the frozen v2 file: the scoreboard, then its frame-level
+  breakdown. One earlier run scored only the upstream baselines, to test the tool. It was **not**
+  looked at for v3, so that it could not become a way of choosing between versions. v3 was instead
+  checked against v2 frame by frame, without ground truth (section 6). See
+  `docs/public_window_log.md`.
 
 ## 6. Results
 
@@ -126,7 +135,9 @@ leave-one-game-out.
 
 | method | all 13 | Metrica (3) | SkillCorner (10) |
 |---|---|---|---|
-| **shipped: LightGBM v2 + tuned decoder (nested estimate)** | **0.393** | 0.47–0.49 per game | 0.33–0.43 per game |
+| **shipped: v3 = v2 + touch-sequence features, tuned decoder (nested estimate)** | **0.417** | 0.52–0.56 per game | 0.34–0.44 per game |
+| v3 + change-point model driving the decoder's costs (three searches) | 0.413–0.429 | | |
+| v2 (39 features), tuned decoder (nested estimate) | 0.393 | 0.45–0.49 per game | 0.33–0.43 per game |
 | v2, M4 decoder settings | 0.395 | 0.473 | 0.371 |
 | v2 with boundary refinement | 0.388 | 0.469 | 0.364 |
 | v2 without team-shape features | 0.368 | 0.447 | 0.344 |
@@ -135,7 +146,10 @@ leave-one-game-out.
 | upstream baseline, ported (nearest player, ±2 s vote) | 0.189 | 0.229 | 0.176 |
 
 The learned model beats the rules on all 13 games. Team-shape features carry the team call while
-the ball is unknown. Under the realistic noise, the ported baseline scores 0.18–0.23, close to
+the ball is unknown. The touch-sequence features of v3 improve on v2 on 11 of 13 games at equal
+decoder settings. A change-point model that drives the decoder's transition costs was also tried;
+its gain was not stable across searches, so it is not shipped (`docs/ablation.md`).
+Under the realistic noise, the ported baseline scores 0.18–0.23, close to
 its published full-match score on the real game (0.243). The noise model was never tuned to that
 number, so the closeness is independent evidence that the noise model is realistic.
 
@@ -149,7 +163,7 @@ number, so the closeness is independent evidence that the noise model is realist
 | Barcelona share of ball-in-play | 59.9% | 58.8% | 45–75% | pass |
 | possessions under 0.5 s; X on graded frames | 0; 0 | 0; 0 | ≤5%; 0 | pass |
 
-**Public window (correctness check, after freezing):** the frozen submission scores macroF1
+**Public window (correctness check of the pipeline, on the frozen v2 file):** v2 scores macroF1
 **0.783** and spellF1 **0.513** on the public 5 minutes. Frame accuracy is 0.814, the alive/dead F1
 is 0.941, and the team call is right on 89% of frames where both agree the ball is alive. It reports 15 possessions of mean
 17.8 s, against the truth's 17 of mean 14.2 s. For reference, the upstream baselines score
@@ -161,9 +175,11 @@ is the under-segmentation already measured on external games (section 7).
 ## 7. Limitations and next steps
 
 - **Under-segmentation.** On external games the model reports 0.6–0.7× the true number of
-  possessions. It misses quick turnovers. Tuning the decoder cannot fix this: cheaper switches add
-  false switches faster than they recover real ones. The next step is sharper evidence at changes
-  of control: touch and reception events, ball direction changes near a player.
+  possessions. It misses quick turnovers: possessions under 3 s are a third of the true ones and
+  are rarely matched. Tuning the decoder cannot fix this: cheaper switches add false switches
+  faster than they recover real ones. The touch-sequence features of v3 place boundaries better
+  but do not recover most short possessions. About 40% of frames have no ball, and a change of
+  control inside such a gap cannot be located from the tracking.
 - **Proxy labels.** External labels approximate, not reproduce, the competition's definition (which
   comes from corrected tracking). SkillCorner's labels are automatic and its tracking is broadcast
   (extrapolated off camera). External scores are a relative guide, not a forecast.
@@ -187,27 +203,31 @@ py -3.11 -m venv .venv
 .venv\Scripts\python.exe tasks.py validate --expect-sha256 recorded
 ```
 
-The output is `outputs\real\submission.csv`, in about 15–40 s. `--expect-sha256 recorded` fails
-unless the file equals the frozen one (`config/submission.sha256`, `6ad9d4ad…`). This was verified
-on a fresh clone with a fresh virtual environment. Everything that determines the bytes is pinned:
+The output is `outputs\real\submission.csv`, in about 20–50 s. `--expect-sha256 recorded` fails
+unless the file equals the frozen one (`config/submission.sha256`). Byte-exact reproduction from
+a fresh clone with a fresh virtual environment was verified for v2 on the real data, and for both
+versions on a full-length synthetic match. Everything that determines the bytes is pinned:
 - all dependencies (`requirements.txt`, full closure);
 - the upstream submodule commit;
 - the model file, stored byte-exact;
 - the frozen config;
 - single-threaded LightGBM inference.
 
+The earlier frozen version is reproduced with
+`tasks.py submission --method v2 --expect-sha256 recorded-v2`.
+
 Rebuilding the model from external data only (each step is deterministic):
 
 ```
 .venv\Scripts\python.exe tasks.py external --prepare
 .venv\Scripts\python.exe -m ext.train cache
-.venv\Scripts\python.exe -m ext.train logo --variant all
-.venv\Scripts\python.exe -m ext.train final --variant all --c-switch 15 --c-dead 25 --temperature 1.0
-.venv\Scripts\python.exe tasks.py tune
+.venv\Scripts\python.exe -m ext.train logo --variant touch
+.venv\Scripts\python.exe -m ext.train final-v3 --variant touch
+.venv\Scripts\python.exe tasks.py tune --variant touch --freeze
 ```
 
-`python tasks.py test` runs 57 unit and end-to-end tests on synthetic matches in the exact ATD
-format.
+`python tasks.py test` runs the unit and end-to-end tests (61) on synthetic matches in the exact
+ATD format.
 
 **Development note.** The code was written with an AI coding assistant. In line with the terms,
 the assistant never had access to the match data, video or any extract of them. A team member ran

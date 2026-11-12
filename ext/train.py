@@ -357,7 +357,7 @@ def _write_json(path, data):
         handle.write("\n")
 
 
-def final_v3(variant="touch", with_change=True):
+def final_v3(variant="touch", with_change=False):
     """Train the v3 models on every external game: models/emission_v3.* and change_v3.*.
     Decoding settings are not stored here; they are frozen in config/final_v3.yaml."""
     games = game_list()
@@ -395,7 +395,9 @@ def main(argv=None):
     p.add_argument("--variant", default="touch", choices=sorted(VARIANTS))
     p = sub.add_parser("final-v3")
     p.add_argument("--variant", default="touch", choices=sorted(VARIANTS))
-    p.add_argument("--no-change", action="store_true", help="emission model only")
+    p.add_argument("--with-change", action="store_true",
+                   help="also train the change-point model (an experiment that is not shipped: "
+                        "its gain was not robust, see docs/ablation.md)")
     p = sub.add_parser("final")
     p.add_argument("--variant", default="all", choices=sorted(VARIANTS))
     p.add_argument("--c-switch", type=float, required=True)
@@ -414,7 +416,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     if args.cmd == "final-v3":
-        return final_v3(args.variant, not args.no_change)
+        return final_v3(args.variant, args.with_change)
 
     if args.cmd == "logo-change":
         logo_change(args.variant)
