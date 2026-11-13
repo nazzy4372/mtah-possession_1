@@ -67,7 +67,8 @@ def load_oof(variant):
             path, variant))
     saved = np.load(path)
     games = train.game_list()
-    eval_sets = [train.prepare(g, "full", train.EVAL_SEED + i) for i, g in enumerate(games)]
+    eval_sets = [train.prepare(g, train.condition_of(variant), train.EVAL_SEED + i)
+                 for i, g in enumerate(games)]
     return games, eval_sets, {g: saved[g] for g in games}, saved["prior"]
 
 

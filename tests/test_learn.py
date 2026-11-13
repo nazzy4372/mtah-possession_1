@@ -21,9 +21,32 @@ def test_matrix_shape_and_graded_only(built):
     assert np.nanmin(rank) >= 0.0 and np.nanmax(rank) <= 1.0
 
 
-def test_no_feature_encodes_ball_missingness_directly(built):
-    _, names, _ = built
-    assert not any("missing" in n or "known" in n or "observed" in n for n in names)
+def test_gap_features_exist_and_stay_out_of_the_frozen_feature_sets(built):
+    """Ball-gap features are only for models trained on the 'speed' ball model. The frozen v2 and
+    v3 feature sets must not pick them up, or those models would stop being reproducible."""
+    import json
+    import sys
+
+    from mtah import emission_v2, emission_v3
+    from mtah.official import REPO_ROOT
+    sys.path.insert(0, str(REPO_ROOT))
+    from ext import train
+
+    _, names, X = built
+    for name in learn_features.GROUP_GAP:
+        assert name in names
+    i = {n: k for k, n in enumerate(names)}
+    known_now = X[:, i["gap_len"]] == 0
+    assert (X[known_now, i["gap_elapsed"]] == 0).all()          # no gap where the ball is known
+    assert np.nanmax(X[:, i["gap_len"]]) > 1.0                    # the synthetic ball has gaps
+    for variant in ("all", "touch"):
+        assert not set(train.VARIANTS[variant](names)) & set(learn_features.GROUP_GAP)
+    assert set(learn_features.GROUP_GAP) <= set(train.VARIANTS["gap"](names))
+    v2 = json.loads(emission_v2.MODEL_META.read_text(encoding="utf-8"))["features"]
+    assert v2 == train.VARIANTS["all"](names)
+    if emission_v3.EMISSION_META.is_file():
+        v3 = json.loads(emission_v3.EMISSION_META.read_text(encoding="utf-8"))["features"]
+        assert v3 == train.VARIANTS["touch"](names)
 
 
 def test_team_swap_is_an_involution_and_mirrors(built):

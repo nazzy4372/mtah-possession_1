@@ -29,6 +29,7 @@ from mtah.spec import GameSpec  # noqa: E402
 BUNDLES = ROOT / "ext_cache" / "bundles"
 OUT = ROOT / "outputs" / "external"
 CONDITIONS = ("clean", "balldrop", "full")
+FULL2_DEAD_BALL_FILL = 0.25  # share of each dead stretch with a ball restored before dropout
 
 
 def load(name):
@@ -50,12 +51,16 @@ def tracking_for(path, spec, condition, seed):
     tracking = io_atd.load_game(path, spec)
     if condition == "balldrop":
         augment.ball_dropout(tracking, seed=seed)
-    elif condition == "full":
+    elif condition in ("full", "full2"):
         rests = load_rests(path)
         if not rests:   # no event coordinates (SkillCorner): restart spot from the tracking
             gt = pm.label_codes(pm.read_label_csv(Path(path) / "gt.csv"))
             rests = augment.rests_from_labels(gt, tracking.ball_xy, spec.fps)
-        tracking = augment.full(tracking, seed=seed, fps=spec.fps, rests=rests)
+        # full: ball model v1 (models v2, v3). full2: ball visibility calibrated to player speed
+        # on the real match, dead ball carried by the restarting player.
+        params = augment.AugmentParams() if condition == "full" else \
+            augment.AugmentParams(ball_model="speed", dead_ball_fill=FULL2_DEAD_BALL_FILL)
+        tracking = augment.full(tracking, seed=seed, params=params, fps=spec.fps, rests=rests)
     elif condition != "clean":
         raise ValueError("unknown condition {!r}".format(condition))
     return tracking

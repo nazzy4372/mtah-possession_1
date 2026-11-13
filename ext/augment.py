@@ -56,6 +56,108 @@ class AugmentParams:
     # the real match, so missingness carries almost no dead-ball signal, as on the real match.
     dead_ball_fill: float = 1.0
     restart_jitter_m: float = 0.1
+    # Ball visibility model. "v1" (conditions `balldrop`, `full`; models v2 and v3): dropout
+    # independent of the state of play, dead ball restored as a resting ball. "speed" (condition
+    # `full2`): visibility calibrated to player speed as measured on the real match, and a
+    # restored dead ball is carried by the player who restarts. See calibrated_dropout.
+    ball_model: str = "v1"
+
+
+# Real match, graded frames, label-free (tools/slow_play_stats.py): share of frames with the ball
+# tracked, by rank of the median player speed within the half. The ball goes untracked mostly
+# while play is slow, i.e. during stoppages.
+RANK_EDGES = (0.10, 0.25, 0.50)
+KNOWN_TARGET = (0.086, 0.298, 0.507, 0.827)
+GAP_MIN_FRAMES = (75, 200)                         # a gap lasts at least this long (real: few short gaps)
+GAP_END_PROB = (1 / 600.0, 1 / 400.0, 1 / 250.0, 1 / 100.0)   # per frame, by speed bin: a gap
+                                                   # persists while play is slow, ends as it resumes
+CROWD_FACTOR = (1.0, 1.0, 1.8, 3.0)                # 0, 1, 2, 3+ players within 3 m (real hazard ratios)
+
+
+def speed_rank(players_xy: np.ndarray, fps: int) -> np.ndarray:
+    """Rank in [0, 1] of the 1 s-smoothed median player speed; NaN where no player is tracked."""
+    p = players_xy
+    step = np.full(p.shape[:2], np.nan)
+    step[1:-1] = np.hypot(p[2:, :, 0] - p[:-2, :, 0], p[2:, :, 1] - p[:-2, :, 1]) * fps / 2.0
+    any_player = (~np.isnan(step)).any(axis=1)
+    med = np.full(len(p), np.nan)
+    med[any_player] = np.nanmedian(step[any_player], axis=1)
+    valid = np.isfinite(med)
+    kernel = np.ones(fps)
+    num = np.convolve(np.where(valid, med, 0.0), kernel, mode="same")
+    den = np.convolve(valid.astype(float), kernel, mode="same")
+    smooth = np.where(den > 0, num / np.maximum(den, 1), np.nan)
+    rank = np.full(len(p), np.nan)
+    ok = np.isfinite(smooth)
+    order = np.argsort(smooth[ok], kind="stable")
+    r = np.empty(order.size)
+    r[order] = np.arange(order.size) / float(max(1, order.size - 1))
+    rank[ok] = r
+    return rank
+
+
+def calibrated_dropout(tracking, rank: np.ndarray, seed: int = 0, targets=KNOWN_TARGET,
+                       iterations: int = 14):
+    """In-place: blank the ball so that, in each player-speed bin, the share of frames with a
+    tracked ball matches the real match. Returns the achieved share per bin.
+
+    A gap starts with a per-bin probability (higher in a crowd), lasts at least GAP_MIN_FRAMES and
+    then ends with a per-bin probability that is small while play is slow. The per-bin start
+    probabilities are found by iteration against `targets`, with the same random numbers every
+    pass, so the result is deterministic for a seed. Frames the source already lacks stay
+    missing; a bin whose source visibility is already below its target is left as it is."""
+    rng = np.random.default_rng(seed)
+    n = tracking.n_frames
+    ball = tracking.ball_xy
+    seen0 = tracking.ball_observed.copy()
+    bins = np.digitize(np.nan_to_num(rank, nan=0.0), RANK_EDGES)          # 0 slowest .. 3 fastest
+    d = np.hypot(tracking.players_xy[:, :, 0] - ball[:, None, 0],
+                 tracking.players_xy[:, :, 1] - ball[:, None, 1])
+    crowd = np.minimum(3, np.sum(np.nan_to_num(d, nan=np.inf) < 3.0, axis=1))
+    factor = np.asarray(CROWD_FACTOR)[crowd]
+    u_start, u_end = rng.random(n), rng.random(n)
+    min_len = rng.integers(GAP_MIN_FRAMES[0], GAP_MIN_FRAMES[1] + 1, size=n)
+    end_prob = np.asarray(GAP_END_PROB)[bins]
+    target_miss = 1.0 - np.asarray(targets)
+    start = np.full(4, 0.002)
+
+    def simulate(start_prob):
+        blank = np.zeros(n, dtype=bool)
+        p_start = start_prob[bins] * factor
+        t = 0
+        while t < n:
+            if seen0[t] and u_start[t] < p_start[t]:
+                stop = min(n, t + int(min_len[t]))
+                while stop < n and u_end[stop] >= end_prob[stop]:
+                    stop += 1
+                blank[t:stop] = True
+                t = stop
+            else:
+                t += 1
+        return blank
+
+    blank = np.zeros(n, dtype=bool)
+    for _ in range(iterations):
+        blank = simulate(start)
+        missing = blank | ~seen0
+        for b in range(4):
+            sel = bins == b
+            if not sel.any():
+                continue
+            actual = float(missing[sel].mean())
+            natural = float((~seen0[sel]).mean())
+            if natural >= target_miss[b]:
+                start[b] = 0.0                      # the source already lacks the ball this often
+            elif actual > 0:
+                # move the odds of a missing ball towards the target (damped, to stay stable)
+                odds = (target_miss[b] / (1 - target_miss[b])) / (actual / max(1e-9, 1 - actual))
+                start[b] = float(np.clip(start[b] * odds ** 0.7, 1e-6, 0.5)) \
+                    if start[b] > 0 else 1e-4
+    ball[blank] = np.nan
+    tracking.ball_speed[blank] = np.nan
+    seen = tracking.ball_observed
+    return tuple(float(seen[bins == b].mean()) if (bins == b).any() else float("nan")
+                 for b in range(4))
 
 
 def _runs(mask):
@@ -106,15 +208,22 @@ def ball_dropout(tracking, seed: int = 0):
     return float(added.mean())
 
 
-def restore_dead_ball(tracking: Tracking, rests, fraction: float, jitter_m: float, seed: int):
-    """In-place: put back a resting ball for part of each dead stretch where the source blanked it.
+def restore_dead_ball(tracking: Tracking, rests, fraction: float, jitter_m: float, seed: int,
+                      carried: bool = False):
+    """In-place: put back a ball for part of each dead stretch where the source blanked it.
 
-    rests: [(start, stop, x, y)] in video frames and metres, from the converter. Each is a stretch
-    over which the ball should be resting at (x, y): just outside the line after a ball out, or on
-    the restart spot before a restart. Only frames where the ball is missing are filled, and only
-    the given fraction of each stretch, nearest its own anchor."""
+    rests: [(start, stop, x, y, anchor)] in video frames and metres, from the converter. "start"
+    stretches place the ball just outside the line after it went out; "end" stretches place it
+    on the restart spot before the restart. Only frames where the ball is missing are filled, and
+    only the given fraction of each stretch, nearest its own anchor.
+
+    carried=True (ball model "speed"): before a restart the ball is with the player who takes
+    it, i.e. the tracked player nearest the restart spot at the restart, followed back in time as
+    that player walks to the spot. That is the real pattern: a dead ball that is tracked is
+    usually moving next to a player, not resting alone."""
     rng = np.random.default_rng(seed)
     ball = tracking.ball_xy
+    players = tracking.players_xy
     for start, stop, x, y, anchor in rests:
         length = int(round((stop - start) * fraction))
         if length <= 0:
@@ -122,6 +231,14 @@ def restore_dead_ball(tracking: Tracking, rests, fraction: float, jitter_m: floa
         a, b = (stop - length, stop) if anchor == "end" else (start, start + length)
         missing = np.isnan(ball[a:b, 0])
         fill = np.array([x, y]) + rng.normal(0.0, jitter_m, size=(b - a, 2))
+        if carried and anchor == "end":
+            last = players[min(stop, len(players)) - 1]
+            dist = np.hypot(last[:, 0] - x, last[:, 1] - y)
+            if np.isfinite(dist).any():
+                taker = int(np.nanargmin(dist))
+                path = players[a:b, taker] + np.array([0.4, 0.0])
+                tracked = ~np.isnan(path[:, 0])
+                fill[tracked] = path[tracked] + rng.normal(0.0, 0.03, size=(int(tracked.sum()), 2))
         ball[a:b][missing] = fill[missing]
 
 
@@ -153,8 +270,11 @@ def full(tracking: Tracking, seed: int = 0, params: AugmentParams = AugmentParam
     ball_src = Tracking(players_xy=tracking.players_xy, players_speed=tracking.players_speed,
                         ball_xy=tracking.ball_xy.copy(), ball_speed=tracking.ball_speed.copy(),
                         slot_team=tracking.slot_team, pitch=tracking.pitch, meta=tracking.meta)
+    speed_model = params.ball_model == "speed"
     if rests:
-        restore_dead_ball(ball_src, rests, params.dead_ball_fill, params.restart_jitter_m, seed + 2)
+        restore_dead_ball(ball_src, rests, params.dead_ball_fill, params.restart_jitter_m, seed + 2,
+                          carried=speed_model)
+    rank = speed_rank(tracking.players_xy, fps) if speed_model else None
 
     # 1. view loss: outside a band around the play, nobody is tracked
     _, episodes = _episodes(rng, n, params.view_loss_share,
@@ -226,5 +346,8 @@ def full(tracking: Tracking, seed: int = 0, params: AugmentParams = AugmentParam
                       ball_speed=ball_src.ball_speed, slot_team=slot_team,
                       pitch=tracking.pitch, meta=replace(tracking.meta, slot_team=slot_team))
     # 6. ball dropout
-    ball_dropout(result, seed=seed + 1)
+    if speed_model:
+        calibrated_dropout(result, rank, seed=seed + 1)
+    else:
+        ball_dropout(result, seed=seed + 1)
     return result

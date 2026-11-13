@@ -5,9 +5,12 @@ Built on features.Features plus a few counts. Design rules, from the M3 domain-g
   * player speed enters only RELATIVE to its own half (rank and robust z-score). The real match
     and Metrica share a speed scale but SkillCorner does not, so an absolute threshold would not
     transfer between sources;
-  * "is the ball missing" is never a feature in its own right. Ball features are NaN when the ball
-    is unknown, and the training data is augmented so that missingness carries almost no dead-ball
-    signal (ext/augment.py), as on the real match;
+  * ball missingness. Models v2 and v3 have no missingness feature and were trained on data in
+    which missingness carried almost no dead-ball signal. That rested on a wrong reading of the
+    real match. A label-free check (tools/slow_play_stats.py) shows the real ball is tracked on
+    9% of the slowest frames and 83% of the fastest half, so a gap is strong evidence of a
+    stoppage. GROUP_GAP adds explicit gap features for models trained on data with the same
+    visibility pattern (ext/augment.py, ball model "speed");
   * every home/away pair can be swapped (see SWAP) so training can mirror H <-> A, which removes
     any home bias and doubles the data.
 
@@ -124,6 +127,35 @@ def build(tracking, spec, F=None):
         cols["line_dist_x"] = np.minimum(bx, length - bx)           # to the nearest goal line
         cols["centre_dist"] = np.hypot(bx - length / 2.0, by - width / 2.0)
 
+    # --- ball gap and stoppage cues (GROUP_GAP). On the real match the ball goes untracked mostly
+    # while play is slow (tools/slow_play_stats.py), so a gap is itself evidence of a stoppage:
+    # the ball is kicked out or play is whistled dead, tracking loses it, and it reappears at the
+    # restart. These features are only valid with training data whose ball visibility follows
+    # player speed in the same way (ext/augment.py, ball model "speed").
+    known = F.ball_known
+    frame = np.arange(n)
+    last_known = np.maximum.accumulate(np.where(known, frame, -1))
+    next_known = np.minimum.accumulate(np.where(known, frame, 10 ** 9)[::-1])[::-1]
+    has_last, has_next = last_known >= 0, next_known < 10 ** 9
+    elapsed = np.where(known, 0.0, np.where(has_last, (frame - last_known) / fps, 60.0))
+    remaining = np.where(known, 0.0, np.where(has_next, (next_known - frame) / fps, 60.0))
+    cols["gap_len"] = np.clip(np.where(known, 0.0, elapsed + remaining), 0, 120)
+    cols["gap_elapsed"] = np.clip(elapsed, 0, 60)
+    cols["gap_remaining"] = np.clip(remaining, 0, 60)
+    with np.errstate(invalid="ignore"):
+        line = np.minimum.reduce([bx, length - bx, by, width - by])      # negative = off the pitch
+    cols["last_seen_line"] = np.clip(np.where(has_last, line[np.maximum(last_known, 0)], np.nan),
+                                     -5, 34)                             # ball kicked out?
+    cols["next_seen_line"] = np.clip(np.where(has_next, line[np.minimum(next_known, n - 1)],
+                                              np.nan), -5, 34)           # restart from a line?
+    cols["rank_at_last_seen"] = np.where(has_last, ps_rank[np.maximum(last_known, 0)], np.nan)
+    cols["known_share_m5"] = _nanroll(known.astype(float), s(5))
+    # a whistle: players slow down sharply from the 3 s before to the 3 s after
+    cols["ps_drop3"] = _nanroll(ps_rank, s(3), "past") - _nanroll(ps_rank, s(3), "future")
+    out_now = known & (np.nan_to_num(F.out_dist, nan=-1.0) > 0)
+    last_out = np.maximum.accumulate(np.where(out_now, frame, -1))
+    cols["since_out"] = np.clip(np.where(last_out >= 0, (frame - last_out) / fps, 60.0), 0, 60)
+
     # --- proximity
     cols["d_home"] = np.clip(F.d_home, 0, 40)
     cols["d_away"] = np.clip(F.d_away, 0, 40)
@@ -222,6 +254,10 @@ PAIRS = (("d_home", "d_away"), ("n_home_2", "n_away_2"), ("n_home_5", "n_away_5"
 SIGNED = ("margin", "margin_m05", "margin_m1", "margin_m3", "touch_signed", "shape_diff",
           "shape_diff_m2", "touch_delta1", "margin_past1", "margin_next1", "margin_delta1",
           "ball_vx_home", "ball_adv_home")
+
+# Ball-gap and stoppage cues, for models trained on the "speed" ball model only.
+GROUP_GAP = ("gap_len", "gap_elapsed", "gap_remaining", "last_seen_line", "next_seen_line",
+             "rank_at_last_seen", "known_share_m5", "ps_drop3", "since_out")
 
 # Added after M5 (change-of-possession evidence). Kept as a group so the frozen M4 feature set
 # ("all") stays reproducible.

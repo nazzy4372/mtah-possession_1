@@ -47,29 +47,41 @@ LGB_PARAMS = {
 }
 NUM_ROUNDS = 250
 
-def _m4(names):
-    """The frozen M4 feature set: everything except raw speed and the later touch group."""
+def _touch(names):
+    """The frozen v3 feature set: everything except raw speed and the later gap group."""
     return [n for n in names if n not in learn_features.GROUP_SPEED_RAW
-            and n not in learn_features.GROUP_TOUCH]
+            and n not in learn_features.GROUP_GAP]
+
+
+def _m4(names):
+    """The frozen M4 (v2) feature set: the v3 set without the touch group."""
+    return [n for n in _touch(names) if n not in learn_features.GROUP_TOUCH]
 
 
 VARIANTS = {
     "all": _m4,
     "noshape": lambda names: [n for n in _m4(names) if n not in learn_features.GROUP_SHAPE],
     "rawspeed": lambda names: [n for n in names if not n.startswith("ps_rank") and n != "ps_z"
-                               and n not in learn_features.GROUP_TOUCH],
+                               and n not in learn_features.GROUP_TOUCH
+                               and n not in learn_features.GROUP_GAP],
     # M5: without the widest (+/-5 s) windows
     "short": lambda names: [n for n in _m4(names) if not n.endswith("_m5")],
     # post-M5: plus touch-sequence and ball-kinematics features around the frame
-    "touch": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW],
+    "touch": _touch,
+    # plus ball-gap and stoppage cues; only for training data with the "speed" ball model
+    "gap": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW],
 }
-FEATURE_VERSION = 2   # bump when learn_features.build changes, so caches are rebuilt
+FEATURE_VERSION = 3   # bump when learn_features.build changes
+# Caches of the older condition keep their version: the columns the older variants use have not
+# changed, and their models (v2, v3) were trained from those caches.
+CACHE_VERSION = {"full": 2}
 
 
 # -- feature cache -------------------------------------------------------------------------------
 
 def cache_path(game, condition, seed):
-    return CACHE / "{}_{}_{}_v{}.npz".format(game, condition, seed, FEATURE_VERSION)
+    return CACHE / "{}_{}_{}_v{}.npz".format(game, condition, seed,
+                                             CACHE_VERSION.get(condition, FEATURE_VERSION))
 
 
 def prepare(game, condition, seed):
@@ -102,16 +114,25 @@ def game_list():
 
 # Training-set variants that emphasise frames near a true change of state (within CHANGE_NEAR
 # frames). spellF1 is decided at the changes, but they are a small share of all frames.
-#   name -> (feature variant, weight on near-change frames, keep every near-change frame)
+#   name -> (feature variant, weight on near-change frames, keep every near-change frame,
+#            noise condition of the training and evaluation data)
 TRAINING = {
-    "touch_w3": ("touch", 3.0, False),      # every 5th frame as usual, near-change frames x3
-    "touch_dense": ("touch", 1.0, True),    # every near-change frame, every 5th elsewhere
+    "touch_w3": ("touch", 3.0, False, "full"),     # every 5th frame, near-change frames x3
+    "touch_dense": ("touch", 1.0, True, "full"),   # every near-change frame, every 5th elsewhere
+    # Noise condition full2: ball visibility follows player speed as on the real match.
+    "touch_f2": ("touch", 1.0, False, "full2"),    # the v3 features on the new data
+    "gap_f2": ("gap", 1.0, False, "full2"),        # plus ball-gap and stoppage cues
 }
 
 
 def resolve(variant):
     """(feature variant, near-change weight, dense near changes) for a training variant name."""
-    return TRAINING.get(variant, (variant, 1.0, False))
+    return TRAINING.get(variant, (variant, 1.0, False, "full"))[:3]
+
+
+def condition_of(variant):
+    """Noise condition a variant is trained and evaluated under."""
+    return TRAINING.get(variant, (variant, 1.0, False, "full"))[3]
 
 
 def all_variants():
@@ -291,8 +312,9 @@ def decode_and_score(d, logp_graded, dec_params, use_refine=True, bootstrap=0):
 def logo(variant="all", verbose=True):
     """Out-of-fold raw scores for every game (held-out copy, eval seed)."""
     games = game_list()
-    train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
-    eval_sets = [prepare(g, "full", EVAL_SEED + i) for i, g in enumerate(games)]
+    condition = condition_of(variant)
+    train_sets = [prepare(g, condition, TRAIN_SEED + i) for i, g in enumerate(games)]
+    eval_sets = [prepare(g, condition, EVAL_SEED + i) for i, g in enumerate(games)]
     feature_variant, near_weight, dense = resolve(variant)
     keep = VARIANTS[feature_variant](list(train_sets[0]["names"]))
     oof = {}
@@ -392,7 +414,7 @@ def final_v3(variant="touch", with_change=False):
     """Train the v3 models on every external game: models/emission_v3.* and change_v3.*.
     Decoding settings are not stored here; they are frozen in config/final_v3.yaml."""
     games = game_list()
-    train_sets = [prepare(g, "full", TRAIN_SEED + i) for i, g in enumerate(games)]
+    train_sets = [prepare(g, condition_of(variant), TRAIN_SEED + i) for i, g in enumerate(games)]
     feature_variant, near_weight, dense = resolve(variant)
     keep = VARIANTS[feature_variant](list(train_sets[0]["names"]))
     MODELS.mkdir(exist_ok=True)
@@ -432,7 +454,8 @@ COST_GRID = [(cs, cd) for cs in (4.0, 8.0, 15.0, 25.0) for cd in (8.0, 15.0, 25.
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("cache")
+    p = sub.add_parser("cache")
+    p.add_argument("--condition", default="full", choices=("full", "full2"))
     p = sub.add_parser("logo-change")
     p.add_argument("--variant", default="touch", choices=all_variants())
     p = sub.add_parser("final-v3")
@@ -470,15 +493,17 @@ def main(argv=None):
     if args.cmd == "cache":
         for i, g in enumerate(game_list()):
             t = time.perf_counter()
-            prepare(g, "full", TRAIN_SEED + i)
-            prepare(g, "full", EVAL_SEED + i)
-            print("cached {} in {:.0f} s".format(g, time.perf_counter() - t), flush=True)
+            prepare(g, args.condition, TRAIN_SEED + i)
+            prepare(g, args.condition, EVAL_SEED + i)
+            print("cached {} ({}) in {:.0f} s".format(g, args.condition, time.perf_counter() - t),
+                  flush=True)
         return 0
 
     oof_file = OUT / "oof_{}.npz".format(args.variant)
     if args.reuse and oof_file.is_file():
         games = game_list()
-        eval_sets = [prepare(g, "full", EVAL_SEED + i) for i, g in enumerate(games)]
+        eval_sets = [prepare(g, condition_of(args.variant), EVAL_SEED + i)
+                     for i, g in enumerate(games)]
         saved = np.load(oof_file)
         oof = {g: saved[g] for g in games}
         prior, temperature = saved["prior"], float(saved["temperature"])
