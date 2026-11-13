@@ -122,11 +122,11 @@ alive) is 0.43, against an estimated 0.34 / 0.45 on the real match.
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
 - **Public 5-minute window:** used as a correctness check only, after everything was frozen, and
-  looked at **twice**, both times on the frozen v2 file: the scoreboard, then its frame-level
-  breakdown. One earlier run scored only the upstream baselines, to test the tool. It was **not**
-  looked at for v3, so that it could not become a way of choosing between versions. v3 was instead
-  checked against v2 frame by frame, without ground truth (section 6). See
-  `docs/public_window_log.md`.
+  looked at **three times**: twice on the frozen v2 file (the scoreboard, then its frame-level
+  breakdown) and once on the frozen v3 file. One earlier run scored only the upstream baselines,
+  to test the tool. v3 was chosen over v2 on the external games alone and frozen, with its
+  SHA-256 recorded, before its check, so the window played no part in choosing between versions.
+  See `docs/public_window_log.md`.
 
 ## 6. Results
 
@@ -169,14 +169,22 @@ and the same team on 92.7% of frames both call alive. They report 297 and 303 po
 `X` sits on exactly the same frames. The new model changes labels around changes of state, not
 the alignment or meaning of the file.
 
-**Public window (correctness check of the pipeline, on the frozen v2 file):** v2 scores macroF1
-**0.783** and spellF1 **0.513** on the public 5 minutes. Frame accuracy is 0.814, the alive/dead F1
-is 0.941, and the team call is right on 89% of frames where both agree the ball is alive. It reports 15 possessions of mean
-17.8 s, against the truth's 17 of mean 14.2 s. For reference, the upstream baselines score
-0.58–0.62 macroF1 and up to 0.424 spellF1 on the same window. The check shows that frames are
-aligned, the file is well-formed and the labels mean what we intend. With only 17 possessions, it
-cannot rank or tune anything, and nothing was changed after it. The slightly low possession count
-is the under-segmentation already measured on external games (section 7).
+**Public window (correctness check, each file checked after it was frozen):**
+
+| on the public 5 minutes (7,500 frames, 17 possessions) | macroF1 | spellF1 | frame accuracy | alive/dead F1 | team accuracy (both alive) | possessions |
+|---|---|---|---|---|---|---|
+| **submitted file, v3** | **0.793** | **0.563** | 0.826 | 0.942 | 0.905 | 15 of mean 17.8 s |
+| earlier file, v2 | 0.783 | 0.513 | 0.814 | 0.941 | 0.892 | 15 of mean 17.8 s |
+| ground truth | | | | | | 17 of mean 14.2 s |
+| best upstream baseline on this window | 0.621 | 0.424 | | | | |
+
+The check shows that frames are aligned, the file is well-formed and the labels mean what we
+intend. With only 17 possessions it cannot rank or tune anything: one possession more or less
+moves spellF1 by about 0.06, which is the whole difference between the two rows. Nothing was
+changed after any look, and v3 had been chosen on the external games before its check. The
+slightly low possession count is the under-segmentation already measured on external games
+(section 7). Dead ball is the weakest class on this window (recall 0.53): short stoppages are
+played through.
 
 ## 7. Limitations and next steps
 

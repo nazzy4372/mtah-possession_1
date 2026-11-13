@@ -33,8 +33,8 @@ def main(argv=None):
                         help="score a file other than the one already checked (logs a new look)")
     args = parser.parse_args(argv)
 
-    # The window was used on the frozen v2 file only (docs/public_window_log.md). Scoring another
-    # version would make it a way of choosing between versions, which the rules forbid.
+    # Every look is logged in docs/public_window_log.md. Scoring a new version needs --force, as
+    # a deliberate step: the window may check a frozen file, never choose between versions.
     import hashlib
     digest = hashlib.sha256(Path(args.file).read_bytes()).hexdigest()
     checked = (ROOT / "config" / "submission_v2.sha256").read_text(encoding="utf-8").split()[0]
