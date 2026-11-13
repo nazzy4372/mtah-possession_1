@@ -122,9 +122,10 @@ alive) is 0.43, against an estimated 0.34 / 0.45 on the real match.
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
 - **Public 5-minute window:** used as a correctness check only, after everything was frozen, and
-  looked at **three times**: twice on the frozen v2 file (the scoreboard, then its frame-level
-  breakdown) and once on the frozen v3 file. One earlier run scored only the upstream baselines,
-  to test the tool. v3 was chosen over v2 on the external games alone and frozen, with its
+  looked at **four times**: twice on the frozen v2 file (the scoreboard, then its frame-level
+  breakdown), once on the frozen v3 file, and once per segment on the v3 file to understand the
+  organisers' definitions, as CHALLENGE.md invites. One earlier run scored only the upstream
+  baselines, to test the tool. v3 was chosen over v2 on the external games alone and frozen, with its
   SHA-256 recorded, before its check, so the window played no part in choosing between versions.
   See `docs/public_window_log.md`.
 
