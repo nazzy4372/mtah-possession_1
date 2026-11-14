@@ -59,6 +59,68 @@ def test_set_piece_diagnostic_counts():
     assert r["phases"]["build up"]["n"] == 2 and r["phases"]["build up"]["same"] == 100
 
 
+def test_team_evidence_and_prior():
+    iv = io_tagging.Interval
+    sides = {"Home": io_tagging.HOME, "Away": io_tagging.AWAY}
+    intervals = [iv("build up", 10, 30, {"team": "Home"}),
+                 iv("progression", 25, 40, {"team": "Away"}),          # conflict on 25..29
+                 iv("long ball", 50, 60, {"team": "Home"}),            # not team evidence
+                 iv("defending in middle third", 60, 70, {"team": "Home"}),
+                 iv("set pieces", 70, 80, {"team": "Home", "type": "Corner Kick"}),
+                 iv("creating chances", 80, 90, {"team": "N/A"})]
+    ev = io_tagging.team_evidence(intervals, sides, 100)
+    assert (ev[10:25] == io_tagging.HOME).all() and (ev[30:40] == io_tagging.AWAY).all()
+    assert (ev[25:30] == io_tagging.NONE).all() and (ev[40:] == io_tagging.NONE).all()
+
+    logp = np.zeros((100, 3))
+    out = io_tagging.add_team_prior(logp, ev, 0.2)
+    assert np.array_equal(out[:, 2], logp[:, 2])                       # dead ball never touched
+    assert (out[10:25, 1] == -0.2).all() and (out[10:25, 0] == 0).all()
+    assert (out[30:40, 0] == -0.2).all() and (out[30:40, 1] == 0).all()
+    assert (out[40:] == 0).all() and (logp == 0).all()                 # input not modified
+
+
+def test_v5_is_v4_without_tags_and_follows_strong_tags(small_bundle):
+    from mtah import emission_v5, io_atd
+    if not emission_v5.available():
+        import pytest
+        pytest.skip("v5 config not frozen")
+    spec = small_bundle.spec
+    tr = io_atd.load_game(small_bundle.path, spec)
+    v4, kos = pipeline.label_tracking(tr, spec, "v4")
+    none = np.full(spec.n_frames, io_tagging.NONE, dtype=np.int8)
+    same, _ = pipeline.label_tracking(tr, spec, "v5", kickoffs=kos, tag_evidence=none)
+    assert np.array_equal(same, v4)
+    # the synthetic bundle's tagging has kickoffs only, so the file-based evidence is empty too
+    assert (emission_v5.tag_evidence(small_bundle.path, spec) == io_tagging.NONE).all()
+    home = np.full(spec.n_frames, io_tagging.HOME, dtype=np.int8)
+    pushed, _ = pipeline.label_tracking(tr, spec, "v5", kickoffs=kos, tag_evidence=home)
+    assert np.sum(pushed == "A") < np.sum(v4 == "A")
+    assert np.sum(pushed == "D") <= np.sum(v4 == "D") * 1.05 + 25     # dead ball barely moves
+    import pytest
+    with pytest.raises(ValueError):
+        pipeline.label_tracking(tr, spec, "v5", kickoffs=kos)
+
+
+def test_weight_rule_refuses_a_weight_that_can_lose():
+    from mtah.official import REPO_ROOT as root
+    sys.path.insert(0, str(root))
+    from ext import tags
+
+    def scenario(gains):
+        return {"rows": [{"spell": [0.40 + g]} for g in gains]}
+    result = {"weights": [0.0, 0.1, 0.2, 0.4],
+              "scenarios": {"clean": scenario([0, 0.004, 0.009, 0.014]),
+                            "real-like": scenario([0, 0.003, 0.006, 0.010]),
+                            "10% wrong team": scenario([0, 0.001, 0.003, 0.003]),
+                            "20% wrong team": scenario([0, 0.003, 0.005, -0.001]),
+                            "30% wrong team": scenario([0, 0.002, 0.001, -0.001])}}
+    weight, _ = tags.choose_weight(result)
+    assert weight == 0.2                       # 0.4 loses when the tags are bad; 0.2 never does
+    result["scenarios"]["30% wrong team"] = scenario([0, -0.001, -0.002, -0.004])
+    assert tags.choose_weight(result)[0] == 0.0
+
+
 def test_tagging_stats_tool_runs_on_a_bundle(small_bundle, tmp_path):
     from test_tools import run_tool
 

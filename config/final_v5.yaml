@@ -1,0 +1,18 @@
+# Model v5 = model v4 (models/emission_v4.txt, config/final_v4.yaml) plus a team prior
+# from the match's Smart Tagging. Written by `python -m ext.tags freeze`.
+# The weight was chosen on 10 SkillCorner games, whose automatic phases of play stand in
+# for the tagging, degraded to be no better than the real stream (ext/tags.py).
+# Rule: no mean loss in any tag-quality scenario; then the best worst case over the
+# plausible ones. Nothing here was chosen with the provided match's labels or the
+# public 5-minute window.
+base_model: v4
+tagging:
+  weight: 0.2000
+validation:
+  games: 10
+  mean_spell_f1_gain_by_scenario:
+    10pct_wrong_team: +0.0029
+    20pct_wrong_team: +0.0048
+    30pct_wrong_team: +0.0007
+    clean: +0.0091
+    real-like: +0.0065

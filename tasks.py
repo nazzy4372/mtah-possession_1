@@ -91,14 +91,18 @@ def cmd_submission(args):
 
     # Aggregates only: this runs on the real match, and its output may be shared.
     print("game        {}  ({} frames), method {}".format(spec.name, spec.n_frames, args.method))
-    if args.method in ("v2", "v3", "v4"):
-        from mtah import emission_v2, emission_v3, emission_v4
-        s = {"v2": emission_v2, "v3": emission_v3, "v4": emission_v4}[args.method].settings()
+    if args.method in ("v2", "v3", "v4", "v5"):
+        from mtah import emission_v2, emission_v3, emission_v4, emission_v5
+        s = {"v2": emission_v2, "v3": emission_v3, "v4": emission_v4,
+             "v5": emission_v5}[args.method].settings()
         print("settings    from {}: c_switch {:.2f} c_die {:.2f} c_restart {:.2f} temperature "
               "{:.2f} dead_bias {:+.2f} refine {}{}".format(
                   s["source"], s["c_switch"], s["c_die"], s["c_restart"], s["temperature"],
                   s["dead_bias"], s["refine"],
                   " change weight {:.2f}".format(s["w_change"]) if s.get("w_change") else ""))
+        if s.get("w_tagging"):
+            print("tagging     team prior from Smart Tagging, weight {:.2f} per frame".format(
+                s["w_tagging"]))
     for kickoff in result.kickoffs:
         print("kickoff     {}".format(kickoff.describe(spec.fps)))
         for window, values in kickoff.diagnostics.items():
@@ -235,7 +239,7 @@ def main(argv=None):
     p.add_argument("--spec", help="game_spec.json for a non-BAR-ATH bundle")
     p.add_argument("--expect-sha256", metavar="HEX|recorded",
                    help="fail unless the file has this SHA-256 ('recorded' = the frozen one)")
-    p.add_argument("--method", choices=("v4", "v3", "v2", "v1", "baseline"),
+    p.add_argument("--method", choices=("v5", "v4", "v3", "v2", "v1", "baseline"),
                    help="default: the submitted model (v4: v3's features trained on the "
                         "corrected ball-visibility noise). v3 and v2 reproduce the earlier frozen "
                         "files; v1 is the rules; baseline is the ported upstream baseline")

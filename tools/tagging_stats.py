@@ -97,7 +97,21 @@ def collect(codes, intervals, spec, sides):
         p["dead"] += int(np.sum(c == pm.D))
         p["alive"] += int(np.sum(c != pm.D))
         p["same"] += int(np.sum(c == (pm.H if side == io_tagging.HOME else pm.A)))
-    return {"n_instances": len(intervals), "n_inside": len(inside), "pieces": rows,
+    # the team prior a model could take from the tags (io_tagging.team_evidence)
+    evidence = io_tagging.team_evidence(intervals, sides, spec.n_frames) if sides else None
+    prior = None
+    if evidence is not None:
+        alive = graded & (codes != pm.D)
+        covered = alive & (evidence != io_tagging.NONE)
+        on = graded & (evidence != io_tagging.NONE)
+        runs = int(np.sum(on[1:] & ~on[:-1]) + int(on[0]))
+        prior = {"coverage": covered.sum() / max(1, alive.sum()),
+                 "agreement": float(np.mean(codes[covered] == evidence[covered]))
+                 if covered.any() else 0.0,
+                 "runs": runs, "mean_run_s": on.sum() / max(1, runs) / float(fps),
+                 "dead_inside": float(np.mean(codes[on] == pm.D)) if on.any() else 0.0}
+    return {"prior": prior,
+            "n_instances": len(intervals), "n_inside": len(inside), "pieces": rows,
             "offsets_s": offsets, "n_restarts": int(len(restarts)), "our_dead_runs": int(len(ours)),
             "our_dead_runs_tagged": tagged, "phases": phases}
 
@@ -173,6 +187,15 @@ def main(argv=None):
                 p["same"] / max(1, p["alive"])))
         print("  dead = share of the phase's frames we call dead; tagged team has = share of the "
               "frames we\n  call alive on which we give the ball to the phase's tagged team")
+    if r["prior"]:
+        q = r["prior"]
+        print()
+        print("team evidence from the in-possession phases ({}), conflicts removed".format(
+            ", ".join(c.upper() for c in io_tagging.IN_POSSESSION)))
+        print("  covers {:.3f} of the frames we call alive; we agree with it on {:.3f} of those"
+              .format(q["coverage"], q["agreement"]))
+        print("  {} stretches of mean {:.1f} s; we call {:.3f} of their frames dead".format(
+            q["runs"], q["mean_run_s"], q["dead_inside"]))
     return 0
 
 

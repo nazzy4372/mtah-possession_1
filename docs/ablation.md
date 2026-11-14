@@ -189,3 +189,48 @@ dead-ball runs under 1 s), fixed before v4 was run on the real match.
 
 v4's frozen decoding settings are in `config/final_v4.yaml` (switch 6.34, die 24.23, restart 4.43,
 temperature 1.77, dead-ball bias +0.53, no refinement).
+
+## Model v5: v4 plus a team prior from Smart Tagging
+
+**Why it was left out before, and why that was too cautious.** Smart Tagging exists only for the
+provided match, so we first judged that its weight could not be validated. But SkillCorner's open
+data carries its own automatic phases of play with a team (build-up, create, finish, transition,
+quick break), which is the same kind of stream. Our SkillCorner dead-ball labels were derived
+from those phases, so they cannot test anything about alive against dead. They can test a prior
+on **which team** has the ball, which is where the tags have something to add: a label-free check
+on the real match (`tools/tagging_stats.py`) showed that the dead-ball side is already consistent
+(a dead ball of ours before 55 of 57 tagged set pieces), while inside the tagged possession
+phases our team call differs from the tags on 8–15% of alive frames.
+
+**The prior.** On frames inside a BUILD UP, PROGRESSION, CREATING CHANCES or ATTACKING TRANSITION
+phase of one team, the other team's log-score is lowered by `weight` nats per frame before
+decoding (`io_tagging.team_evidence`, `add_team_prior`). Frames where phases of both teams
+overlap are skipped. The dead-ball score is never touched, and v4's model and decoder settings
+are unchanged.
+
+**The test** (`python -m ext.tags experiment`): the frozen v4 settings on the leave-one-game-out
+predictions of the 10 SkillCorner games, with and without the prior. SkillCorner's phases come
+from the same possession model as its labels, so they are cleaner than an independent tagger.
+They are therefore degraded: boundaries moved by about 1 s, 22% of phases dropped to match the
+real coverage, and a share of phases given to the wrong team.
+
+| tag quality | tags name the true team on | we agree with the tags on | spellF1 gain at weight 0.1 | **0.2** | 0.4 | 0.8 |
+|---|---|---|---|---|---|---|
+| clean | 87.1% | 91.9% | +0.006 | **+0.009** (10 of 10 games) | +0.014 | +0.020 |
+| real-like (jitter, 22% dropped) | 87.0% | 91.7% | +0.004 | **+0.007** (8 of 10) | +0.010 | +0.013 |
+| + 10% of phases to the wrong team | 80.4% | 84.4% | +0.001 | **+0.003** (6 of 10) | +0.003 | +0.001 |
+| + 20% wrong team | 72.1% | 75.4% | +0.004 | **+0.005** (8 of 10) | −0.001 | −0.011 |
+| + 30% wrong team | 64.0% | 65.5% | +0.002 | **+0.001** (6 of 10) | −0.001 | −0.010 |
+
+(Baseline without tags: 0.3881 on these 10 games.)
+
+**The weight rule** (`ext.tags.choose_weight`, fixed before the real run): no mean loss in any
+scenario, including the implausibly bad ones; then the best worst case over the plausible ones.
+It gives **0.2**, frozen in `config/final_v5.yaml`. Larger weights earn more when the tags are
+good and lose when they are bad.
+
+**What to expect.** A small gain: about +0.003 to +0.009 spellF1 on the stand-in games, and it
+does not recover missed possessions (the predicted possession count does not move). On the real
+match our agreement with the tagging evidence is close to the "real-like" and "10% wrong team"
+rows, far from the 20% and 30% rows. The stand-in is imperfect (a different vendor's phases),
+which is why the rule buys safety before gain.

@@ -56,14 +56,14 @@ class Params:
     use_refine: bool = True
 
 
-METHODS = ("v2", "v1", "baseline")      # v4 and v3 are added when their model and config exist
+METHODS = ("v2", "v1", "baseline")      # v5, v4, v3 are added when their model and config exist
 SUBMITTED = "v4"                        # the model behind the recorded submission SHA-256
 
 
 def methods():
-    from mtah import emission_v3, emission_v4
-    learned = tuple(name for name, module in (("v4", emission_v4), ("v3", emission_v3))
-                    if module.available())
+    from mtah import emission_v3, emission_v4, emission_v5
+    learned = tuple(name for name, module in (("v5", emission_v5), ("v4", emission_v4),
+                                              ("v3", emission_v3)) if module.available())
     return learned + METHODS
 
 
@@ -73,9 +73,10 @@ def default_method() -> str:
 
 
 def label_tracking(tracking, spec: GameSpec, method: str = None, params: Params = Params(),
-                   kickoffs=None):
+                   kickoffs=None, tag_evidence=None):
     """(labels, kickoffs) for an in-memory Tracking. The evaluation harness calls this directly so
-    it can corrupt a Tracking (ball dropout) before labelling."""
+    it can corrupt a Tracking (ball dropout) before labelling. `tag_evidence` is the per-frame
+    team evidence of the Smart Tagging (emission_v5.tag_evidence), needed by method v5 only."""
     method = method or default_method()
     if kickoffs is None:
         kickoffs = halves.detect_kickoffs(tracking, spec)
@@ -95,12 +96,17 @@ def label_tracking(tracking, spec: GameSpec, method: str = None, params: Params 
         raw = decode.decode(logp, spec, kickoffs, dec)
         if use_refine:
             raw = refine.refine(raw, F, spec, params.refine, kickoffs)
-    elif method in ("v3", "v4"):
-        from mtah import emission_v3, emission_v4
-        model = emission_v4 if method == "v4" else emission_v3
+    elif method in ("v3", "v4", "v5"):
+        from mtah import emission_v3, emission_v4, emission_v5, io_tagging
+        model = emission_v3 if method == "v3" else emission_v4
         F = features.compute(tracking, spec)
         logp, ratio = model.evidence(tracking, spec, F)
         s = model.settings()
+        if method == "v5":
+            if tag_evidence is None:
+                raise ValueError("method v5 needs the Smart Tagging evidence of the game")
+            logp = io_tagging.add_team_prior(logp, tag_evidence,
+                                             emission_v5.settings()["w_tagging"])
         if ratio is None:
             raw = decode.decode(logp, spec, kickoffs, model.decoder_params())
         else:
@@ -123,7 +129,11 @@ def run(data_dir, spec: GameSpec, method: str = None, params: Params = Params())
     timings["parse_s"] = time.perf_counter() - t0
 
     t1 = time.perf_counter()
-    labels, kickoffs = label_tracking(tracking, spec, method, params)
+    tag_evidence = None
+    if method == "v5":
+        from mtah import emission_v5
+        tag_evidence = emission_v5.tag_evidence(data_dir, spec)
+    labels, kickoffs = label_tracking(tracking, spec, method, params, tag_evidence=tag_evidence)
     timings["label_s"] = time.perf_counter() - t1
     return RunResult(labels=labels, kickoffs=kickoffs, timings=timings)
 
