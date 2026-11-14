@@ -127,3 +127,65 @@ v3's frozen decoding settings are in `config/final_v3.yaml` (switch 5.01, die 12
 temperature 1.87, dead-ball bias +0.38, no refinement). The predicted possession count is still
 0.56–0.78 of the truth per game: the touch features place boundaries better, but do not recover
 most of the missed short possessions.
+
+## Model v4: the v3 features, trained on corrected ball-visibility noise
+
+**What was wrong.** Models v2 and v3 were trained on noise condition `full`, in which the ball
+drops out independently of the state of play. A label-free measurement on the real match
+(`tools/slow_play_stats.py`, aggregates only) showed that the real ball is tracked on 8.6% of the
+slowest tenth of frames (by mean player speed) and on 82.7% of the faster half: it goes untracked
+mostly during stoppages. Condition `full2` reproduces this (`docs/label_derivation.md`).
+
+**Test.** All variants are scored on the same `full2` evaluation copies of the 13 external games,
+leave-one-game-out, with the nested 2-fold tuning of the decoder (60 trials per fold). The
+acceptance rule is the one fixed before v3: a clear win on most games on the nested estimate.
+
+| variant | trained on | nested 2-fold spellF1 on `full2` | Metrica (3) | SkillCorner (10) |
+|---|---|---|---|---|
+| `touch_x2`: the v3 recipe (59 features) | `full` | 0.4189 | 0.556 | 0.378 |
+| **`touch_f2`: the same 59 features (model v4)** | `full2` | **0.4385** | 0.604 | 0.389 |
+| `gap_f2`: + 9 ball-gap and stoppage features | `full2` | 0.4367 | 0.606 | 0.386 |
+| the frozen v3 file's model and settings, in sample | `full` | 0.4394 | 0.569 | 0.401 |
+
+- **`touch_f2` against `touch_x2`: accepted.** Better on 10 of 13 games, mean +0.020, paired
+  t = 3.1; better on 7 of 10 SkillCorner games (mean +0.011) and on all three Metrica games
+  (+0.04 to +0.07). The three losses are −0.006 to −0.009. Training on noise that matches the
+  real ball visibility helps when the test data has that visibility.
+- **`gap_f2` against `touch_f2`: rejected.** The gap features (`learn_features.GROUP_GAP`: gap
+  length, time into and until the end of the gap, whether the ball was last or next seen near a
+  line, player-speed rank when it was lost, share of the last 5 s with a known ball, a sudden
+  drop in player speed, time since the ball was last outside the pitch) are better on only 6 of
+  13 games, mean −0.002. The existing features already carry the signal once the training data
+  has the right visibility. The features stay in the code, unused by any shipped model.
+- **The in-sample row is not a fair reference** and is shown only for transparency: that model
+  was trained on every game it is scored on. On the old data the same in-sample figure is 0.434
+  against an honest nested 0.417, an optimism of about 0.017. `touch_x2` is the honest version of
+  that row.
+
+What the test can and cannot show: it shows that v4 is better than v3 **if** the real ball
+behaves as under `full2`. That premise rests on a label-free measurement of the real match, not
+on its labels. No label, ground truth or public-window score of the provided match was used to
+build `full2`, to choose v4, or to tune it.
+
+**A degenerate decoder regime, found and excluded.** The first search for v4's decoder settings
+returned `c_switch` 31.9, `c_die` 4.5, `c_restart` 4.6: the coordinate-wise median of a top 10
+that mixed two regimes. A direct change of team then costs more than the ball dying and
+restarting, so the decoder never switches directly and bridges every change with a short dead
+ball. Measured on the 13 external games (means per game):
+
+| | dead-ball runs | of them under 1 s | direct H↔A changes | spellF1 |
+|---|---|---|---|---|
+| external truth | 103 | 3.3 | 236 | |
+| first search (bridging) | 222 | 105.8 | 0 | 0.434 |
+| **frozen v4 settings** | 102 | 0.0 | 116 | 0.439 |
+
+spellF1 is blind to the difference, because possessions are runs of H or of A either way; the
+labels are plainly wrong, and macroF1 and any reader of the file would see it. The rule
+`c_switch ≤ c_die + c_restart` (`tune.no_bridge`) is now part of the search for the `full2`
+variants: invalid trials are not decoded and are scored 0, so the whole budget goes to valid
+settings. All three variants in the table above were re-tuned under the rule. The v2 and v3
+settings, frozen earlier, satisfy it. `tools/report.py` gained a matching alarm (at most 10% of
+dead-ball runs under 1 s), fixed before v4 was run on the real match.
+
+v4's frozen decoding settings are in `config/final_v4.yaml` (switch 6.34, die 24.23, restart 4.43,
+temperature 1.77, dead-ball bias +0.53, no refinement).

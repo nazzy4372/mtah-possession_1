@@ -59,12 +59,25 @@ source blanked it. The `clean` condition never uses this.
 
 ### Domain artefact to be aware of
 In the Metrica sample data the **ball is blanked while it is dead**: 86–97% of dead frames have no
-ball against about 1% of alive frames. On the real match the ball goes missing mostly during live
-play (the published baselines, which call every ball-less frame dead, recover only 8–34% of the dead
-frames). So (a) the v1 rules never use "ball missing" as dead-ball evidence, and (b) every
-evaluation is also run under real-calibrated ball dropout (`ext/augment.py`), which inserts long
-gaps independently of the true state, with the frequency, length distribution and crowding
-dependence measured on the real match by `tools/real_stats.py`.
+ball against about 1% of alive frames. Used naively, "no ball" would be a perfect dead-ball cue
+that exists only in this source.
+
+**First reading (models v2 and v3), later corrected.** We first assumed that on the real match the
+ball goes missing mostly during live play. The evidence was indirect: the published baselines,
+which call every ball-less frame dead, recover only 8–34% of the dead frames. So the v1 rules never
+use "ball missing" as dead-ball evidence, and noise condition `full` inserts long ball gaps
+independently of the state of play, with the frequency, length distribution and crowding dependence
+measured on the real match by `tools/real_stats.py`.
+
+**Correction (model v4).** A label-free measurement over the whole match
+(`tools/slow_play_stats.py`) showed the assumption was wrong. Ranking every graded frame by mean
+player speed within its half, the ball is tracked on 8.6% of the slowest tenth of frames, 29.8% of
+the next 15%, 50.7% of the next quarter and 82.7% of the faster half. The real tracker loses the
+ball mostly while play is slow, which is when the ball is dead. The baselines' figures
+come from the public 5-minute window alone, which holds only a handful of stoppages and does not
+represent the match. Noise
+condition `full2` (below) reproduces the measured dependence. The measurement uses no labels and
+no ground truth: player speed and ball visibility only.
 
 ## SkillCorner open data (10 A-League 2024/25 matches)
 
@@ -117,3 +130,28 @@ Achieved on Metrica games 1 and 3:
 | player step p50 / p95 (m per frame) | 0.054 / 0.187 | 0.054 / 0.179, 0.060 / 0.182 |
 | same-team pair within 0.5 m | 3.5% | 7.1% / 3.0% (mostly natural) |
 | frames with ≥ 23 tracks | 2.4% | 0.3% / 0.3% (not reproduced) |
+
+## Noise model, second version (`ext/augment.py`, condition `full2`; model v4)
+Players and slots are corrupted exactly as under `full`. Only the ball differs:
+
+- **Visibility follows player speed.** Each frame gets the rank of its mean player speed within
+  its half (`augment.speed_rank`), in four bins: slowest 10%, 10–25%, 25–50%, fastest 50%. Ball
+  gaps start with a per-bin probability that is calibrated iteratively
+  (`augment.calibrated_dropout`) until the tracked share in each bin matches the real match.
+  Gaps are longer when they start in slow play and more likely when the ball is in a crowd.
+- **The dead ball is rarely put back.** Where Metrica blanked a dead ball, a ball is restored on a
+  quarter of each resting stretch (it was 70% under `full`), and it is carried by the player who
+  takes the restart instead of lying still, because on the real match a tracked ball in slow play
+  is with a player half of the time and at rest a third of the time.
+
+Tracked share of the ball by player-speed bin (slowest 10% / 10–25% / 25–50% / fastest 50%):
+
+| | slowest 10% | 10–25% | 25–50% | fastest 50% |
+|---|---|---|---|---|
+| real match (label-free) | 0.086 | 0.298 | 0.507 | 0.827 |
+| Metrica g1, `full2` | 0.114 | 0.304 | 0.460 | 0.817 |
+| Metrica g3, `full2` | 0.113 | 0.307 | 0.507 | 0.799 |
+| SkillCorner 1874553, `full2` | 0.240 | 0.294 | 0.514 | 0.730 |
+| the same games under `full` | about 0.69 | 0.66 | 0.60 | 0.58 |
+
+Labels are unchanged: `full2` alters only the corrupted tracking, never the ground truth.

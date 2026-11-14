@@ -63,26 +63,39 @@ real file, with untracked padding and a half-time gap. The same pipeline therefo
 on them. No hand labels were made on any game; **no data, label or annotation of the provided game
 was used to train, tune or select anything.**
 
-**Noise model** (`ext/augment.py`, condition `full`). The external tracking is corrupted to match the
-real match's label-free aggregates:
+**Noise model** (`ext/augment.py`). The external tracking is corrupted to match the real match's
+label-free aggregates:
 - **ball:** long dropouts (frequency, length histogram and crowding dependence as measured);
 - **players:** loss of view (so some frames have few players), individual player gaps;
 - **slots:** tracklet fragmentation onto 46 slots, so a slot is not a person; duplicate tracks.
 
-Calibration (real vs Metrica under `full`):
+Calibration (real vs Metrica):
 
-| | real | Metrica with `full` |
+| | real | Metrica, corrupted |
 |---|---|---|
 | ball missing | 0.41 | 0.39–0.48 |
 | tracked players (mean) | 20.5 | 20.7–20.9 |
 | tracklets per minute | 11.5 | 11.4–12.6 |
 | player step p50 (m per frame) | 0.054 | 0.054–0.060 |
 
-One artefact needed care. **Metrica blanks the ball whenever it is dead**, so "no ball" would
-look like a perfect dead-ball cue. On the real match the ball goes missing mostly in live play.
-The converter therefore restores a resting ball at the restart spot from the event coordinates,
-and no feature encodes missingness directly. After this, P(missing | dead) is 0.34 and P(missing |
-alive) is 0.43, against an estimated 0.34 / 0.45 on the real match.
+**When the ball goes missing: an assumption we corrected.** Metrica blanks the ball whenever it is
+dead, so "no ball" would look like a perfect dead-ball cue that exists only in that source. For
+models v2 and v3 (noise condition `full`) we assumed that the real ball goes missing mostly in
+live play, restored a resting ball on most dead stretches, and dropped the ball independently of
+the state of play. A later label-free measurement of the whole match
+(`tools/slow_play_stats.py`) showed the opposite. Ranking graded frames by mean player speed:
+
+| ball tracked on | slowest 10% of frames | 10–25% | 25–50% | fastest 50% |
+|---|---|---|---|---|
+| real match | 8.6% | 29.8% | 50.7% | 82.7% |
+| external games under `full` (v2, v3) | about 69% | 66% | 60% | 58% |
+| external games under `full2` (v4) | 11–24% | 29–31% | 46–51% | 73–82% |
+
+The real tracker loses the ball mostly while play is slow, which is when the ball is dead. Noise
+condition `full2` reproduces this: ball gaps start with a probability calibrated per player-speed
+bin, and a dead ball is restored only a quarter of the time, carried by the player taking the
+restart. Model v4 is the v3 feature set retrained on `full2`. The measurement uses player speed
+and ball visibility only: no label, ground truth or public-window score.
 
 ## 4. Possession rules implemented
 
@@ -113,11 +126,19 @@ alive) is 0.43, against an estimated 0.34 / 0.45 on the real match.
   bias and boundary refinement, on the out-of-fold predictions only. The frozen parameters are the
   median of the top 10 trials (`config/final_v3.yaml`). The honest estimate is a **nested 2-fold**
   (tune on half the games, score the other half, swap).
-- **Two versions were frozen.** v2 (39 features) came first. An error analysis of v2 on the
+- **Three versions were frozen.** v2 (39 features) came first. An error analysis of v2 on the
   external out-of-fold predictions then showed that the loss was in changes of possession, which
-  led to the touch-sequence features of v3. v3 was accepted on the external games alone, by a
-  rule fixed beforehand (a clear win on most games on the nested estimate). v2 stays reproducible
-  with `--method v2`.
+  led to the touch-sequence features of v3. v4 keeps v3's features and changes only the training
+  noise (section 3). Each step was accepted on the external games alone, by a rule fixed
+  beforehand (a clear win on most games on the nested estimate). v2 and v3 stay reproducible
+  with `--method v2` and `--method v3`.
+- **A structural check on the decoder settings**, added with v4. The first v4 search returned
+  settings in which a direct change of team cost more than the ball dying and restarting. Such a
+  decoder never switches team directly; it inserts a sub-second dead ball at every change (106
+  dead runs under 1 s per external game against 3 in the truth). spellF1 cannot see this, so the
+  search could not either. Settings of that kind are now excluded from the search
+  (`tune.no_bridge`), and `tools/report.py` raises an alarm if more than 10% of dead-ball runs
+  are under 1 s. The frozen v2 and v3 settings already satisfied the rule.
 - **The provided match was never used to choose anything.** Only label-free aggregates of its
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
@@ -131,12 +152,25 @@ alive) is 0.43, against an estimated 0.34 / 0.45 on the real match.
 
 ## 6. Results
 
-External games, official spellF1, mean over 13 games under `full` noise. Learned variants are
-leave-one-game-out.
+External games, official spellF1, mean over 13 games. Learned variants are leave-one-game-out.
+First, on the corrected noise `full2`, the comparison that decided v4:
 
-| method | all 13 | Metrica (3) | SkillCorner (10) |
+| method, scored on `full2` | all 13 (nested estimate) | Metrica (3) | SkillCorner (10) |
 |---|---|---|---|
-| **shipped: v3 = v2 + touch-sequence features, tuned decoder (nested estimate)** | **0.417** | 0.52–0.56 per game | 0.34–0.44 per game |
+| **v4: v3's features, trained on `full2`** | **0.439** | 0.604 | 0.389 |
+| v3's recipe, trained on `full` | 0.419 | 0.556 | 0.378 |
+| v4 + 9 ball-gap and slow-down features | 0.437 | 0.606 | 0.386 |
+
+v4 is better than v3's recipe on 10 of 13 games (mean +0.020, paired t = 3.1; the three losses
+are under 0.01). The extra features, which encode a ball gap and a sudden drop in player speed
+directly, add nothing once the training data has the right ball visibility (better on 6 of 13),
+so they are not shipped.
+
+Then the earlier results, on the older noise `full`:
+
+| method, scored on `full` | all 13 | Metrica (3) | SkillCorner (10) |
+|---|---|---|---|
+| v3 = v2 + touch-sequence features, tuned decoder (nested estimate) | 0.417 | 0.52–0.56 per game | 0.34–0.44 per game |
 | v3 + change-point model driving the decoder's costs (three searches) | 0.413–0.429 | | |
 | v2 (39 features), tuned decoder (nested estimate) | 0.393 | 0.45–0.49 per game | 0.33–0.43 per game |
 | v2, M4 decoder settings | 0.395 | 0.473 | 0.371 |
@@ -241,7 +275,7 @@ Rebuilding the model from external data only (each step is deterministic):
 .venv\Scripts\python.exe tasks.py tune --variant touch --freeze
 ```
 
-`python tasks.py test` runs the unit and end-to-end tests (61) on synthetic matches in the exact
+`python tasks.py test` runs the unit and end-to-end tests (64) on synthetic matches in the exact
 ATD format.
 
 **Development note.** The code was written with an AI coding assistant. In line with the terms,

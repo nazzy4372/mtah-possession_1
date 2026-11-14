@@ -122,6 +122,9 @@ TRAINING = {
     # Noise condition full2: ball visibility follows player speed as on the real match.
     "touch_f2": ("touch", 1.0, False, "full2"),    # the v3 features on the new data
     "gap_f2": ("gap", 1.0, False, "full2"),        # plus ball-gap and stoppage cues
+    # The v3 recipe (trained on full), held-out games scored on full2: the honest reference for
+    # the two variants above. A fifth entry is the training condition when it differs.
+    "touch_x2": ("touch", 1.0, False, "full2", "full"),
 }
 
 
@@ -131,8 +134,14 @@ def resolve(variant):
 
 
 def condition_of(variant):
-    """Noise condition a variant is trained and evaluated under."""
+    """Noise condition a variant is evaluated under (and trained under, unless stated)."""
     return TRAINING.get(variant, (variant, 1.0, False, "full"))[3]
+
+
+def train_condition_of(variant):
+    """Noise condition of a variant's training copies."""
+    entry = TRAINING.get(variant, (variant, 1.0, False, "full"))
+    return entry[4] if len(entry) > 4 else entry[3]
 
 
 def all_variants():
@@ -312,9 +321,9 @@ def decode_and_score(d, logp_graded, dec_params, use_refine=True, bootstrap=0):
 def logo(variant="all", verbose=True):
     """Out-of-fold raw scores for every game (held-out copy, eval seed)."""
     games = game_list()
-    condition = condition_of(variant)
-    train_sets = [prepare(g, condition, TRAIN_SEED + i) for i, g in enumerate(games)]
-    eval_sets = [prepare(g, condition, EVAL_SEED + i) for i, g in enumerate(games)]
+    train_sets = [prepare(g, train_condition_of(variant), TRAIN_SEED + i)
+                  for i, g in enumerate(games)]
+    eval_sets = [prepare(g, condition_of(variant), EVAL_SEED + i) for i, g in enumerate(games)]
     feature_variant, near_weight, dense = resolve(variant)
     keep = VARIANTS[feature_variant](list(train_sets[0]["names"]))
     oof = {}
@@ -410,17 +419,20 @@ def _write_json(path, data):
         handle.write("\n")
 
 
-def final_v3(variant="touch", with_change=False):
-    """Train the v3 models on every external game: models/emission_v3.* and change_v3.*.
-    Decoding settings are not stored here; they are frozen in config/final_v3.yaml."""
+def final_model(variant="touch", with_change=False, version="v3"):
+    """Train a shipped model on every external game: models/emission_<version>.* (and
+    change_<version>.* on request). v3 is variant `touch` (noise `full`); v4 is `touch_f2` (the
+    same features, noise `full2`). Decoding settings are not stored here; they are frozen in
+    config/final_<version>.yaml."""
     games = game_list()
-    train_sets = [prepare(g, condition_of(variant), TRAIN_SEED + i) for i, g in enumerate(games)]
+    train_sets = [prepare(g, train_condition_of(variant), TRAIN_SEED + i)
+                  for i, g in enumerate(games)]
     feature_variant, near_weight, dense = resolve(variant)
     keep = VARIANTS[feature_variant](list(train_sets[0]["names"]))
     MODELS.mkdir(exist_ok=True)
 
     X, y, w = training_rows(train_sets, keep, near_weight, dense)
-    fit(X, y, weight=w).save_model(str(MODELS / "emission_v3.txt"))
+    fit(X, y, weight=w).save_model(str(MODELS / "emission_{}.txt".format(version)))
     if w is None:
         prior = np.bincount(y, minlength=3)[:3].astype(float) / len(y)
     else:
@@ -430,22 +442,60 @@ def final_v3(variant="touch", with_change=False):
                                             for d in train_sets]), minlength=3)[:3].astype(float)
         prior = (prior + prior[[1, 0, 2]]) / 2.0
         prior /= prior.sum()
-    _write_json(MODELS / "emission_v3.json", {
+    _write_json(MODELS / "emission_{}.json".format(version), {
         "features": keep, "prior": prior.tolist(), "variant": variant,
         "near_change_weight": near_weight, "dense_near_changes": dense,
+        # recorded from v4 on, so that emission_v3.json still retrains byte-identically
+        **({} if version == "v3" else {"noise_condition": train_condition_of(variant)}),
         **_provenance(games, len(y))})
-    print("wrote models/emission_v3.txt ({} features, {} rows)".format(len(keep), len(y)))
+    print("wrote models/emission_{}.txt ({} features, {} rows)".format(
+        version, len(keep), len(y)))
     del X, y
     if with_change:
         X, y = change_rows(train_sets, keep)
-        fit(X, y, num_class=4).save_model(str(MODELS / "change_v3.txt"))
+        fit(X, y, num_class=4).save_model(str(MODELS / "change_{}.txt".format(version)))
         prior = np.bincount(y, minlength=4).astype(float) / len(y)
-        _write_json(MODELS / "change_v3.json", {
+        _write_json(MODELS / "change_{}.json".format(version), {
             "features": keep, "prior": prior.tolist(), "variant": variant,
             "classes": list(CHANGE_CLASSES), "half_width": CHANGE_HALF_WIDTH,
             "near_width": CHANGE_NEAR, **_provenance(games, len(y))})
-        print("wrote models/change_v3.txt ({} rows)".format(len(y)))
+        print("wrote models/change_{}.txt ({} rows)".format(version, len(y)))
     return 0
+
+
+def score_shipped(condition="full2", verbose=True):
+    """The frozen v3 model (models/emission_v3.txt, config/final_v3.yaml), scored on the external
+    evaluation copies of another noise condition. v3 was trained on every game, so this is not
+    leave-one-game-out: it flatters v3, which makes it a conservative reference for a new model."""
+    import lightgbm as lgb
+    import yaml
+
+    from mtah import emission_v3, tune
+
+    booster = lgb.Booster(model_file=str(emission_v3.EMISSION_TXT))
+    meta = json.loads(emission_v3.EMISSION_META.read_text(encoding="utf-8"))
+    cfg = yaml.safe_load(emission_v3.CONFIG.read_text(encoding="utf-8"))
+    dec = decode.DecoderParams(cfg["decoder"]["c_switch"], cfg["decoder"]["c_die"],
+                               cfg["decoder"]["c_restart"])
+    rows = []
+    for i, g in enumerate(game_list()):
+        d = prepare(g, condition, EVAL_SEED + i)
+        names = list(d["names"])
+        X = d["X"][d["graded"]][:, [names.index(k) for k in meta["features"]]]
+        logp = tune.emissions(raw_scores(booster, X), np.asarray(meta["prior"]),
+                              cfg["emission"]["temperature"], cfg["emission"]["dead_bias"])
+        r = decode_and_score(d, logp, dec, use_refine=bool(cfg["refine"]))
+        rows.append({"game": g, **r})
+        if verbose:
+            print("  {:<11} {:.4f}  poss/gt {:.2f}".format(
+                g, r["spell_f1_mean"], r["n_pred_spells"] / r["n_gt_spells"]), flush=True)
+    print("frozen v3 on {}: mean spellF1 {:.4f} (Metrica {:.4f}, SkillCorner {:.4f})".format(
+        condition, mean_spell(rows),
+        mean_spell([r for r in rows if r["game"].startswith("metrica")]),
+        mean_spell([r for r in rows if r["game"].startswith("sc_")])))
+    OUT.mkdir(parents=True, exist_ok=True)
+    _write_json(OUT / "shipped_v3_{}.json".format(condition), rows)
+    return rows
 
 
 COST_GRID = [(cs, cd) for cs in (4.0, 8.0, 15.0, 25.0) for cd in (8.0, 15.0, 25.0)]
@@ -456,6 +506,8 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("cache")
     p.add_argument("--condition", default="full", choices=("full", "full2"))
+    p = sub.add_parser("score-shipped")
+    p.add_argument("--condition", default="full2", choices=("full", "full2"))
     p = sub.add_parser("logo-change")
     p.add_argument("--variant", default="touch", choices=all_variants())
     p = sub.add_parser("final-v3")
@@ -463,6 +515,8 @@ def main(argv=None):
     p.add_argument("--with-change", action="store_true",
                    help="also train the change-point model (an experiment that is not shipped: "
                         "its gain was not robust, see docs/ablation.md)")
+    p = sub.add_parser("final-v4")
+    p.add_argument("--variant", default="touch_f2", choices=all_variants())
     p = sub.add_parser("final")
     p.add_argument("--variant", default="all", choices=all_variants())
     p.add_argument("--c-switch", type=float, required=True)
@@ -480,8 +534,15 @@ def main(argv=None):
                    help="reuse saved out-of-fold predictions (decoding-only changes)")
     args = parser.parse_args(argv)
 
+    if args.cmd == "score-shipped":
+        score_shipped(args.condition)
+        return 0
+
     if args.cmd == "final-v3":
-        return final_v3(args.variant, args.with_change)
+        return final_model(args.variant, args.with_change, "v3")
+
+    if args.cmd == "final-v4":
+        return final_model(args.variant, False, "v4")
 
     if args.cmd == "logo-change":
         logo_change(args.variant)

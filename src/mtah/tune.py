@@ -148,7 +148,9 @@ def _suggest(trial, space):
     return out
 
 
-def optimise(games, eval_sets, oof, prior, n_trials, seed=0, label="", change=None):
+def optimise(games, eval_sets, oof, prior, n_trials, seed=0, label="", change=None, valid=None):
+    """Seeded TPE search. Trials that `valid` rejects are not decoded: they are told a score of 0,
+    so the sampler moves away from them and the whole budget goes to valid settings."""
     import optuna
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction="maximize",
@@ -159,17 +161,45 @@ def optimise(games, eval_sets, oof, prior, n_trials, seed=0, label="", change=No
         trials = [study.ask() for _ in range(min(ROUND, n_trials - done))]
         params = [_suggest(t, space) for t in trials]
         started = time.perf_counter()
-        scores = evaluate_params(params, games, eval_sets, oof, prior, change)
-        for t, s in zip(trials, scores):
-            study.tell(t, float(np.mean([v["spell_f1_mean"] for v in s.values()])))
+        run = [k for k, prm in enumerate(params) if valid is None or valid(prm)]
+        scores = evaluate_params([params[k] for k in run], games, eval_sets, oof, prior,
+                                 change) if run else []
+        values = [0.0] * len(trials)
+        for k, s in zip(run, scores):
+            values[k] = float(np.mean([v["spell_f1_mean"] for v in s.values()]))
+        for t, value in zip(trials, values):
+            study.tell(t, value)
         done += len(trials)
         print("  {} trials {:>3}/{}  best {:.4f}  ({:.0f} s/round)".format(
             label, done, n_trials, study.best_value, time.perf_counter() - started), flush=True)
     return study
 
 
-def median_of_top(study, top=TOP, space=None):
-    ranked = sorted([t for t in study.trials if t.value is not None], key=lambda t: -t.value)[:top]
+def no_bridge(params) -> bool:
+    """A direct change of team must not cost more than the ball dying and restarting.
+
+    When it does, the decoder never switches team directly: it routes every change through a
+    sub-second dead ball. spellF1 cannot see that (possessions are runs of H or of A either way),
+    so such trials score like honest ones, but the labels are wrong: on the external games they
+    hold about 106 dead runs under 1 s per game against 3 in the truth, and no direct change at
+    all against 236. The coordinate-wise median of a top 10 that mixes both regimes can land
+    there even when no single trial did."""
+    return params["c_switch"] <= params["c_die"] + params["c_restart"]
+
+
+def validity_for(variant):
+    """Trial filter for a variant. Applied from the `full2` experiments on (model v4); v2 and v3
+    were frozen before the rule existed, and both of their frozen settings satisfy it."""
+    return no_bridge if _train_module().condition_of(variant) == "full2" else None
+
+
+def median_of_top(study, top=TOP, space=None, valid=None):
+    """Coordinate-wise median of the `top` best trials (of those `valid` accepts)."""
+    ranked = sorted([t for t in study.trials
+                     if t.value is not None and (valid is None or valid(t.params))],
+                    key=lambda t: -t.value)[:top]
+    if not ranked:
+        raise ValueError("no valid trial to take the median of")
     out = {}
     for name, spec in (space or SPACE).items():
         values = [t.params[name] for t in ranked]
@@ -200,8 +230,9 @@ def nested(variant, n_trials, change=None):
     chosen = []
     for tune_on, score_on, name in ((fold_a, fold_b, "A->B"), (fold_b, fold_a, "B->A")):
         g_t, s_t = _subset(tune_on, games, eval_sets)
-        study = optimise(g_t, s_t, oof, prior, n_trials, label=name, change=change)
-        params, _ = median_of_top(study, space=space_for(change))
+        study = optimise(g_t, s_t, oof, prior, n_trials, label=name, change=change,
+                         valid=validity_for(variant))
+        params, _ = median_of_top(study, space=space_for(change), valid=validity_for(variant))
         chosen.append(params)
         g_s, s_s = _subset(score_on, games, eval_sets)
         per_game.update(evaluate_params([params], g_s, s_s, oof, prior, change)[0])
@@ -209,16 +240,24 @@ def nested(variant, n_trials, change=None):
     return mean, per_game, chosen
 
 
+MODEL_OF = {"all": "v2", "touch_f2": "v4"}      # every other variant belongs to model v3
+
+
+def model_of(variant):
+    return MODEL_OF.get(variant, "v3")
+
+
 def config_path(variant):
     """v2 (variant 'all') is frozen in config/final.yaml; later models get their own file."""
-    return CONFIG if variant == "all" else ROOT / "config" / "final_v3.yaml"
+    model = model_of(variant)
+    return CONFIG if model == "v2" else ROOT / "config" / "final_{}.yaml".format(model)
 
 
 def write_config(params, variant, scores, nested_score, path=None):
     """The frozen settings, written by hand-formatting so the bytes are stable."""
     path = Path(path) if path else config_path(variant)
     path.parent.mkdir(exist_ok=True)
-    model = "v2" if variant == "all" else "v3"
+    model = model_of(variant)
     lines = [
         "# Frozen decoding parameters for model {}. Written by `python tasks.py tune --freeze`;"
         .format(model),
@@ -226,6 +265,8 @@ def write_config(params, variant, scores, nested_score, path=None):
         "# of 13 external games under the real-calibrated noise model; median of the top {} trials."
         .format(TOP),
         "# Nothing here was chosen with the provided match or the public 5-minute window.",
+    ] + (["# Trials whose direct switch costs more than die + restart are excluded "
+          "(tune.no_bridge)."] if validity_for(variant) is not None else []) + [
         "model_variant: {}".format(variant),
         "decoder:",
         "  c_switch: {:.4f}".format(params["c_switch"]),
@@ -271,8 +312,12 @@ def main(argv=None):
               "fold_params": chosen}
     if not args.nested_only:
         games, eval_sets, oof, prior = load_oof(args.variant)
-        study = optimise(games, eval_sets, oof, prior, args.trials, label="all", change=change)
-        params, top_scores = median_of_top(study, space=space_for(change))
+        valid = validity_for(args.variant)
+        study = optimise(games, eval_sets, oof, prior, args.trials, label="all", change=change,
+                         valid=valid)
+        params, top_scores = median_of_top(study, space=space_for(change), valid=valid)
+        if valid is not None and not valid(params):
+            raise ValueError("the median of valid trials is itself invalid: {}".format(params))
         frozen = evaluate_params([params], games, eval_sets, oof, prior, change)[0]
         print("frozen (median of top {}): {}".format(TOP, json.dumps(params)))
         print("frozen params on all 13 (tuned on them, optimistic): {:.4f}".format(

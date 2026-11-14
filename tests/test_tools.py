@@ -78,3 +78,6 @@ def test_report_alarm_ranges():
     assert report.alarms([good])["n_warn"] == 0
     bad = dict(good, possessions=320, D_share=0.6, X=5)
     assert report.alarms([bad])["n_warn"] == 3
+    bridged = dict(good, dead_runs=220, dead_runs_under_1s=105)
+    assert report.alarms([bridged])["n_warn"] == 1
+    assert report.alarms([dict(good, dead_runs=100, dead_runs_under_1s=3)])["n_warn"] == 0

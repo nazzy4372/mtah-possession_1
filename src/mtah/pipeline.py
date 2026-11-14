@@ -56,17 +56,20 @@ class Params:
     use_refine: bool = True
 
 
-METHODS = ("v2", "v1", "baseline")      # v3 is added when its model and config are present
+METHODS = ("v2", "v1", "baseline")      # v4 and v3 are added when their model and config exist
+SUBMITTED = "v3"                        # the model behind the recorded submission SHA-256
 
 
 def methods():
-    from mtah import emission_v3
-    return (("v3",) if emission_v3.available() else ()) + METHODS
+    from mtah import emission_v3, emission_v4
+    learned = tuple(name for name, module in (("v4", emission_v4), ("v3", emission_v3))
+                    if module.available())
+    return learned + METHODS
 
 
 def default_method() -> str:
-    """The newest frozen model: v3 when its model and config are present, else v2."""
-    return methods()[0]
+    """The model of the recorded submission when it is present, else the newest one available."""
+    return SUBMITTED if SUBMITTED in methods() else methods()[0]
 
 
 def label_tracking(tracking, spec: GameSpec, method: str = None, params: Params = Params(),
@@ -92,20 +95,21 @@ def label_tracking(tracking, spec: GameSpec, method: str = None, params: Params 
         raw = decode.decode(logp, spec, kickoffs, dec)
         if use_refine:
             raw = refine.refine(raw, F, spec, params.refine, kickoffs)
-    elif method == "v3":
-        from mtah import emission_v3
+    elif method in ("v3", "v4"):
+        from mtah import emission_v3, emission_v4
+        model = emission_v4 if method == "v4" else emission_v3
         F = features.compute(tracking, spec)
-        logp, ratio = emission_v3.evidence(tracking, spec, F)
-        s = emission_v3.settings()
+        logp, ratio = model.evidence(tracking, spec, F)
+        s = model.settings()
         if ratio is None:
-            raw = decode.decode(logp, spec, kickoffs, emission_v3.decoder_params())
+            raw = decode.decode(logp, spec, kickoffs, model.decoder_params())
         else:
-            raw = decode.decode_many_dyn([(logp, spec, kickoffs, emission_v3.decoder_params(),
+            raw = decode.decode_many_dyn([(logp, spec, kickoffs, model.decoder_params(),
                                            s["w_change"], ratio)])[0]
         if s["refine"]:
             raw = refine.refine(raw, F, spec, params.refine, kickoffs)
     else:
-        raise ValueError("unknown method {!r}; have {}".format(method, METHODS))
+        raise ValueError("unknown method {!r}; have {}".format(method, methods()))
     labels = halves.apply_policy(raw, spec, kickoffs)
     check_labels(labels, spec)
     return labels, kickoffs

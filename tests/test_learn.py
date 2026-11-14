@@ -47,6 +47,31 @@ def test_gap_features_exist_and_stay_out_of_the_frozen_feature_sets(built):
     if emission_v3.EMISSION_META.is_file():
         v3 = json.loads(emission_v3.EMISSION_META.read_text(encoding="utf-8"))["features"]
         assert v3 == train.VARIANTS["touch"](names)
+    from mtah import emission_v4
+    if emission_v4.EMISSION_META.is_file():
+        meta = json.loads(emission_v4.EMISSION_META.read_text(encoding="utf-8"))
+        assert meta["features"] == train.VARIANTS["touch"](names)       # v4 = the v3 features
+        assert meta["variant"] == "touch_f2" and meta["noise_condition"] == "full2"
+
+
+def test_training_variants_name_their_noise_conditions():
+    import sys
+
+    from mtah import pipeline, tune
+    from mtah.official import REPO_ROOT
+    sys.path.insert(0, str(REPO_ROOT))
+    from ext import train
+
+    assert train.condition_of("touch") == train.train_condition_of("touch") == "full"
+    assert train.condition_of("touch_f2") == train.train_condition_of("touch_f2") == "full2"
+    # the cross-check variant: trained on the old noise, scored on the new one
+    assert (train.train_condition_of("touch_x2"), train.condition_of("touch_x2")) == \
+        ("full", "full2")
+    assert [tune.model_of(v) for v in ("all", "touch", "touch_f2")] == ["v2", "v3", "v4"]
+    assert tune.config_path("touch").name == "final_v3.yaml"
+    assert tune.config_path("touch_f2").name == "final_v4.yaml"
+    # the default method is the model of the recorded submission, never just the newest file
+    assert pipeline.default_method() in (pipeline.SUBMITTED, pipeline.methods()[0])
 
 
 def test_team_swap_is_an_involution_and_mirrors(built):

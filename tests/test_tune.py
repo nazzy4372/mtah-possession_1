@@ -69,6 +69,26 @@ def test_median_of_top_ten_and_majority_vote():
     assert scores == sorted(scores, reverse=True) and len(scores) == 10
 
 
+def test_bridging_trials_are_excluded_from_the_top():
+    """A direct switch dearer than die + restart makes the decoder bridge every change of team
+    with a dead ball. Such trials must not enter the median, however well they score."""
+    good = {"c_die": 10.0, "c_restart": 5.0, "temperature": 1.0, "dead_bias": 0.0, "refine": False}
+    trials = [_Trial(0.9 - k / 100.0, dict(good, c_switch=40.0 + k)) for k in range(6)]      # bridge
+    trials += [_Trial(0.5 - k / 100.0, dict(good, c_switch=5.0 + k)) for k in range(12)]     # valid
+    mixed, _ = tune.median_of_top(_Study(trials))
+    assert not tune.no_bridge(mixed)                      # the unfiltered median is a bridge
+    params, scores = tune.median_of_top(_Study(trials), valid=tune.no_bridge)
+    assert tune.no_bridge(params) and params["c_switch"] == 9.5 and max(scores) == 0.5
+    with pytest.raises(ValueError):
+        tune.median_of_top(_Study(trials[:6]), valid=tune.no_bridge)
+    # the settings frozen before the rule existed satisfy it
+    from mtah import emission_v2, emission_v3
+    assert tune.no_bridge(emission_v2.settings())
+    if emission_v3.CONFIG.is_file():
+        assert tune.no_bridge(emission_v3.settings())
+    assert tune.validity_for("touch") is None and tune.validity_for("touch_f2") is tune.no_bridge
+
+
 def test_config_round_trip(tmp_path):
     params = {"c_switch": 12.3, "c_die": 30.0, "c_restart": 20.5, "temperature": 0.9,
               "dead_bias": -0.25, "refine": False}

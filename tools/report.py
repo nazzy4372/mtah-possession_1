@@ -43,6 +43,7 @@ def summarise(codes, spec):
             "possessions_under_1.5s": int(np.sum(lengths < 1.5)),
             "possessions_under_0.5s": int(np.sum(lengths < 0.5)),
             "dead_runs": len(dead),
+            "dead_runs_under_1s": int(np.sum(dead_len < 1.0)),
             "mean_dead_run_s": float(dead_len.mean()) if len(dead_len) else 0.0,
             "D_share": float(np.mean(window == pm.D)),
             "home_share_of_alive": n_h / float(n_h + n_a) if n_h + n_a else 0.0,
@@ -117,6 +118,18 @@ def alarms(rows):
         lines.append("{:<4} half {}  {:<22} {:>9}  X on graded frames {}  (flicker <= 5%, no X)"
                      .format("PASS" if ok else "WARN", r["half"], "possessions < 0.5 s",
                              "{:.1%}".format(flicker), r["X"]))
+    # Added with model v4, before its run on the real match: a decoder whose direct switch costs
+    # more than die + restart bridges every change of team with a sub-second dead ball. On the
+    # external truth about 3% of dead-ball runs are under 1 s; a bridging decoder gives about 50%.
+    for r in rows:
+        if "dead_runs_under_1s" not in r:
+            continue
+        share = r["dead_runs_under_1s"] / max(1, r["dead_runs"])
+        ok = share <= 0.10
+        n_warn += not ok
+        lines.append("{:<4} half {}  {:<22} {:>9}  (<= 10% of dead-ball runs; no bridged switches)"
+                     .format("PASS" if ok else "WARN", r["half"], "dead-ball runs < 1 s",
+                             "{:.1%}".format(share)))
     return {"lines": lines, "n_warn": n_warn}
 
 

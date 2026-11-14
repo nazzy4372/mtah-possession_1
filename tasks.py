@@ -91,9 +91,9 @@ def cmd_submission(args):
 
     # Aggregates only: this runs on the real match, and its output may be shared.
     print("game        {}  ({} frames), method {}".format(spec.name, spec.n_frames, args.method))
-    if args.method in ("v2", "v3"):
-        from mtah import emission_v2, emission_v3
-        s = (emission_v3 if args.method == "v3" else emission_v2).settings()
+    if args.method in ("v2", "v3", "v4"):
+        from mtah import emission_v2, emission_v3, emission_v4
+        s = {"v2": emission_v2, "v3": emission_v3, "v4": emission_v4}[args.method].settings()
         print("settings    from {}: c_switch {:.2f} c_die {:.2f} c_restart {:.2f} temperature "
               "{:.2f} dead_bias {:+.2f} refine {}{}".format(
                   s["source"], s["c_switch"], s["c_die"], s["c_restart"], s["temperature"],
@@ -235,7 +235,7 @@ def main(argv=None):
     p.add_argument("--spec", help="game_spec.json for a non-BAR-ATH bundle")
     p.add_argument("--expect-sha256", metavar="HEX|recorded",
                    help="fail unless the file has this SHA-256 ('recorded' = the frozen one)")
-    p.add_argument("--method", choices=("v3", "v2", "v1", "baseline"),
+    p.add_argument("--method", choices=("v4", "v3", "v2", "v1", "baseline"),
                    help="default: the newest frozen model (v3: v2 plus touch-sequence features). "
                         "v2 reproduces the earlier frozen file; v1 is the rules; baseline is the "
                         "ported upstream baseline")
