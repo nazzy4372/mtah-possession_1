@@ -57,7 +57,7 @@ class Params:
 
 
 METHODS = ("v2", "v1", "baseline")      # v4 and v3 are added when their model and config exist
-SUBMITTED = "v3"                        # the model behind the recorded submission SHA-256
+SUBMITTED = "v4"                        # the model behind the recorded submission SHA-256
 
 
 def methods():

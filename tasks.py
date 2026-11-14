@@ -236,9 +236,9 @@ def main(argv=None):
     p.add_argument("--expect-sha256", metavar="HEX|recorded",
                    help="fail unless the file has this SHA-256 ('recorded' = the frozen one)")
     p.add_argument("--method", choices=("v4", "v3", "v2", "v1", "baseline"),
-                   help="default: the newest frozen model (v3: v2 plus touch-sequence features). "
-                        "v2 reproduces the earlier frozen file; v1 is the rules; baseline is the "
-                        "ported upstream baseline")
+                   help="default: the submitted model (v4: v3's features trained on the "
+                        "corrected ball-visibility noise). v3 and v2 reproduce the earlier frozen "
+                        "files; v1 is the rules; baseline is the ported upstream baseline")
     p.set_defaults(func=cmd_submission)
 
     p = sub.add_parser("validate", help="official validator, LF check and SHA-256")

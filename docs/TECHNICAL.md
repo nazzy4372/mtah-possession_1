@@ -2,7 +2,7 @@
 
 **Team Nuttertools.** More than a Hack 2027, Phase 1. Match: FC Barcelona (H) vs Athletic Club (A).
 Code: this repository; every command is listed in section 8. Submission file: `Nuttertools.csv`,
-produced by model v3 (SHA-256 `f6fb5445851627e4dcf5e512fdcf282984c3d7461d311772ac52e4b965fddce9`).
+produced by model v4 (SHA-256 `0432a1ed01eecd1abbeed2ee7df97f14eea0ea56f9a2c45211881e7c8a2eed14`).
 
 ## 1. Approach, and why
 
@@ -124,7 +124,7 @@ and ball visibility only: no label, ground truth or public-window score.
   never reimplemented.
 - **Tuning** (Optuna, seeded TPE, 60 trials) of the decoder costs, emission temperature, dead-ball
   bias and boundary refinement, on the out-of-fold predictions only. The frozen parameters are the
-  median of the top 10 trials (`config/final_v3.yaml`). The honest estimate is a **nested 2-fold**
+  median of the top 10 trials (`config/final_v4.yaml`). The honest estimate is a **nested 2-fold**
   (tune on half the games, score the other half, swap).
 - **Three versions were frozen.** v2 (39 features) came first. An error analysis of v2 on the
   external out-of-fold predictions then showed that the loss was in changes of possession, which
@@ -142,13 +142,18 @@ and ball visibility only: no label, ground truth or public-window score.
 - **The provided match was never used to choose anything.** Only label-free aggregates of its
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
-- **Public 5-minute window:** used as a correctness check only, after everything was frozen, and
-  looked at **four times**: twice on the frozen v2 file (the scoreboard, then its frame-level
-  breakdown), once on the frozen v3 file, and once per segment on the v3 file to understand the
-  organisers' definitions, as CHALLENGE.md invites. One earlier run scored only the upstream
-  baselines, to test the tool. v3 was chosen over v2 on the external games alone and frozen, with its
-  SHA-256 recorded, before its check, so the window played no part in choosing between versions.
-  See `docs/public_window_log.md`.
+- **Public 5-minute window:** used as a correctness check and, as CHALLENGE.md invites, to
+  understand what is expected. It was looked at **four times**: twice on the frozen v2 file (the
+  scoreboard, then its frame-level breakdown), once on the frozen v3 file, and once per segment
+  on the v3 file. One earlier run scored only the upstream baselines, to test the tool. **The
+  submitted v4 file has never been scored on it.** See `docs/public_window_log.md`.
+- **What the window did and did not influence.** No parameter, threshold or model choice was ever
+  fitted to it or selected with it: v3 was chosen over v2, and v4 over v3, on the external games
+  alone. The fourth look did prompt a question. Most of our dead-ball misses in the window came
+  from one stoppage, which made us doubt our assumption about when the real ball goes untracked.
+  We then answered that question without the window and without labels, by measuring ball
+  visibility against player speed over the whole match (section 3). That measurement, not the
+  window, defines the corrected noise model, and the external games decided whether to adopt it.
 
 ## 6. Results
 
@@ -188,38 +193,46 @@ Under the realistic noise, the ported baseline scores 0.18–0.23, close to
 its published full-match score on the real game (0.243). The noise model was never tuned to that
 number, so the closeness is independent evidence that the noise model is realistic.
 
-**Real match: sanity alarms only** (no labels; ranges fixed before any check). Submitted file, v3:
+**Real match: sanity alarms only** (no labels; ranges fixed before the check). Submitted file,
+v4, with the earlier v3 file for comparison:
 
-| alarm | half 1 | half 2 | range | |
-|---|---|---|---|---|
-| possessions | 153 | 144 | 100–200 | pass |
-| mean possession | 13.2 s | 13.4 s | 5–25 s | pass |
-| dead-ball share | 36.4% | 39.4% | 25–50% | pass |
-| Barcelona share of ball-in-play | 61.3% | 58.8% | 45–75% | pass |
-| possessions under 0.5 s; X on graded frames | 0; 0 | 0; 0 | ≤5%; 0 | pass |
+| alarm | v4 half 1 | v4 half 2 | v3 half 1 | v3 half 2 | range | |
+|---|---|---|---|---|---|---|
+| possessions | 134 | 127 | 153 | 144 | 100–200 | pass |
+| mean possession | 14.1 s | 13.5 s | 13.2 s | 13.4 s | 5–25 s | pass |
+| dead-ball share | 40.8% | 45.9% | 36.4% | 39.4% | 25–50% | pass |
+| Barcelona share of ball-in-play | 62.5% | 59.0% | 61.3% | 58.8% | 45–75% | pass |
+| possessions under 0.5 s; X on graded frames | 0; 0 | 0; 0 | 0; 0 | 0; 0 | ≤5%; 0 | pass |
+| dead-ball runs under 1 s (alarm added with v4) | 1 of 55 | 0 of 60 | | | ≤10% | pass |
 
-**v3 against v2 on the real match, without ground truth** (`tools/compare_submissions.py`): the two
-files give the same label on 91.8% of the 158,857 graded frames, the same alive/dead call on 96.2%,
-and the same team on 92.7% of frames both call alive. They report 297 and 303 possessions, and
-`X` sits on exactly the same frames. The new model changes labels around changes of state, not
-the alignment or meaning of the file.
+**v4 against v3 on the real match, without ground truth** (`tools/compare_submissions.py`): the two
+files give the same label on 92.1% of the 158,857 graded frames, the same alive/dead call on 93.8%,
+and the same team on 97.0% of the frames both call alive. `X` sits on exactly the same frames and
+both kickoffs are detected at the same frames. The difference is almost entirely dead ball: v4
+calls 9,219 frames dead that v3 called alive, and only 584 the other way. That is the intended
+effect of the corrected noise model: stoppages in which the ball is untracked or carried are now
+recognised. With more dead ball, v4 reports 261 possessions against v3's 297. (v3 against v2
+agreed on 91.8% of graded frames.)
 
-**Public window (correctness check, each file checked after it was frozen):**
+**Public window (correctness check of the earlier files, each checked after it was frozen; the
+submitted v4 file was not scored on it):**
 
 | on the public 5 minutes (7,500 frames, 17 possessions) | macroF1 | spellF1 | frame accuracy | alive/dead F1 | team accuracy (both alive) | possessions |
 |---|---|---|---|---|---|---|
-| **submitted file, v3** | **0.793** | **0.563** | 0.826 | 0.942 | 0.905 | 15 of mean 17.8 s |
+| earlier file, v3 | 0.793 | 0.563 | 0.826 | 0.942 | 0.905 | 15 of mean 17.8 s |
 | earlier file, v2 | 0.783 | 0.513 | 0.814 | 0.941 | 0.892 | 15 of mean 17.8 s |
 | ground truth | | | | | | 17 of mean 14.2 s |
 | best upstream baseline on this window | 0.621 | 0.424 | | | | |
 
 The check shows that frames are aligned, the file is well-formed and the labels mean what we
 intend. With only 17 possessions it cannot rank or tune anything: one possession more or less
-moves spellF1 by about 0.06, which is the whole difference between the two rows. Nothing was
-changed after any look, and v3 had been chosen on the external games before its check. The
+moves spellF1 by about 0.06, which is the whole difference between the two rows. No setting was
+changed after any look, and v3 had been chosen on the external games before its check. v4 writes
+`X` on the same frames and detects the same kickoffs as these files, so their alignment check
+carries over. The
 slightly low possession count is the under-segmentation already measured on external games
-(section 7). Dead ball is the weakest class on this window (recall 0.53): short stoppages are
-played through.
+(section 7). Dead ball was the weakest class of v3 on this window (recall 0.53), which is what
+led to the whole-match measurement behind v4 (section 5).
 
 ## 7. Limitations and next steps
 
@@ -254,26 +267,30 @@ py -3.11 -m venv .venv
 
 The output is `outputs\real\submission.csv`, in about 20–50 s. `--expect-sha256 recorded` fails
 unless the file equals the frozen one (`config/submission.sha256`). Byte-exact reproduction from
-a fresh clone with a fresh virtual environment was verified for v2 on the real data, and for both
-versions on a full-length synthetic match. Everything that determines the bytes is pinned:
+a fresh clone with a fresh virtual environment was verified for v2 on the real data, and for every
+version on a full-length synthetic match. The v3 file was regenerated byte-identically on the
+real data in a second run. Everything that determines the bytes is pinned:
 - all dependencies (`requirements.txt`, full closure);
 - the upstream submodule commit;
 - the model file, stored byte-exact;
 - the frozen config;
 - single-threaded LightGBM inference.
 
-The earlier frozen version is reproduced with
-`tasks.py submission --method v2 --expect-sha256 recorded-v2`.
+The earlier frozen versions are reproduced with
+`tasks.py submission --method v3 --expect-sha256 recorded-v3` and
+`tasks.py submission --method v2 --expect-sha256 recorded-v2` (add `--out` to keep the files apart).
 
 Rebuilding the model from external data only (each step is deterministic):
 
 ```
 .venv\Scripts\python.exe tasks.py external --prepare
-.venv\Scripts\python.exe -m ext.train cache
-.venv\Scripts\python.exe -m ext.train logo --variant touch
-.venv\Scripts\python.exe -m ext.train final-v3 --variant touch
-.venv\Scripts\python.exe tasks.py tune --variant touch --freeze
+.venv\Scripts\python.exe -m ext.train cache --condition full2
+.venv\Scripts\python.exe -m ext.train logo --variant touch_f2
+.venv\Scripts\python.exe -m ext.train final-v4
+.venv\Scripts\python.exe tasks.py tune --variant touch_f2 --freeze
 ```
+
+(v3: `cache`, `logo --variant touch`, `final-v3 --variant touch`, `tune --variant touch --freeze`.)
 
 `python tasks.py test` runs the unit and end-to-end tests (64) on synthetic matches in the exact
 ATD format.
