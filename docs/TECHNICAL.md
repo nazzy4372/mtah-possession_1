@@ -143,10 +143,12 @@ and ball visibility only: no label, ground truth or public-window score.
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
 - **Public 5-minute window:** used as a correctness check and, as CHALLENGE.md invites, to
-  understand what is expected. It was looked at **four times**: twice on the frozen v2 file (the
-  scoreboard, then its frame-level breakdown), once on the frozen v3 file, and once per segment
-  on the v3 file. One earlier run scored only the upstream baselines, to test the tool. **The
-  submitted v4 file has never been scored on it.** See `docs/public_window_log.md`.
+  understand what is expected. It was looked at **five times**: twice on the frozen v2 file (the
+  scoreboard, then its frame-level breakdown), once on the frozen v3 file, once per segment on
+  the v3 file, and once on the submitted v4 file (scoreboard and per segment). The v4 look came
+  after v4 had been chosen on the external games, frozen, reproduced and packaged for upload,
+  and nothing was changed after it. One earlier run scored only the upstream baselines, to test
+  the tool. See `docs/public_window_log.md`.
 - **What the window did and did not influence.** No parameter, threshold or model choice was ever
   fitted to it or selected with it: v3 was chosen over v2, and v4 over v3, on the external games
   alone. The fourth look did prompt a question. Most of our dead-ball misses in the window came
@@ -214,11 +216,11 @@ effect of the corrected noise model: stoppages in which the ball is untracked or
 recognised. With more dead ball, v4 reports 261 possessions against v3's 297. (v3 against v2
 agreed on 91.8% of graded frames.)
 
-**Public window (correctness check of the earlier files, each checked after it was frozen; the
-submitted v4 file was not scored on it):**
+**Public window (correctness check, each file checked after it was frozen):**
 
 | on the public 5 minutes (7,500 frames, 17 possessions) | macroF1 | spellF1 | frame accuracy | alive/dead F1 | team accuracy (both alive) | possessions |
 |---|---|---|---|---|---|---|
+| **submitted file, v4** | **0.798** | **0.587** | 0.830 | 0.945 | 0.905 | 13 of mean 20.7 s |
 | earlier file, v3 | 0.793 | 0.563 | 0.826 | 0.942 | 0.905 | 15 of mean 17.8 s |
 | earlier file, v2 | 0.783 | 0.513 | 0.814 | 0.941 | 0.892 | 15 of mean 17.8 s |
 | ground truth | | | | | | 17 of mean 14.2 s |
@@ -226,13 +228,21 @@ submitted v4 file was not scored on it):**
 
 The check shows that frames are aligned, the file is well-formed and the labels mean what we
 intend. With only 17 possessions it cannot rank or tune anything: one possession more or less
-moves spellF1 by about 0.06, which is the whole difference between the two rows. No setting was
-changed after any look, and v3 had been chosen on the external games before its check. v4 writes
-`X` on the same frames and detects the same kickoffs as these files, so their alignment check
-carries over. The
-slightly low possession count is the under-segmentation already measured on external games
-(section 7). Dead ball was the weakest class of v3 on this window (recall 0.53), which is what
-led to the whole-match measurement behind v4 (section 5).
+moves spellF1 by about 0.06, more than the difference between any two of our rows. No setting was
+changed after any look, and each version had been chosen on the external games and frozen before
+its check.
+
+What the v4 file gets wrong on this window, by frames: 83.0% correct, 9.3% dead ball called
+alive, 7.6% wrong team, and 3 frames alive called dead.
+- **Short possessions.** 10 of the 17 possessions are matched. Five of the seven missed ones last
+  under 4 s (0.8 s to 3.6 s). This is the under-segmentation measured on external games
+  (section 7).
+- **Dead ball** is the weakest class for both v3 and v4 (recall 0.53 and 0.52; precision 1.00).
+  Of the four stoppages, two are found (83% and 92% of their frames). A 5 s one is played
+  through. In a 20 s one the ball is tracked and moving throughout, among slow players, and we
+  keep a team in possession for most of it. The extra dead ball that v4 finds on the whole match
+  (comparison with v3 above) lies outside this window.
+- **Boundary timing.** Only 5 of the 20 changes of state are placed within 1 s.
 
 ## 7. Limitations and next steps
 
