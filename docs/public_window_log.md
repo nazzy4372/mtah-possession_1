@@ -29,10 +29,22 @@ bin), found the assumption wrong, rebuilt the noise model to match that label-fr
 v3. So the window prompted a question; a label-free measurement and the external games answered
 it.
 
-**The submitted v4 file (`0432a1ed…`) was scored on the window once, in look #5.** By then v4
-had been chosen on the external games, frozen with its SHA-256 recorded, reproduced
-byte-for-byte in a second run and packaged for upload. It was agreed before the look that its
-result could not change which version is submitted, in either direction, and nothing was changed
-after it: no setting, no model, no file. The v4 and v3 rows differ by less than one possession's
-worth of spellF1, so the window says nothing about which is better; that was decided on the
-external games.
+**The v4 file (`0432a1ed…`, the submitted file at the time) was scored on the window once, in
+look #5.** By then v4 had been chosen on the external games, frozen with its SHA-256 recorded,
+reproduced byte-for-byte in a second run and packaged for upload. It was agreed before the look
+that its result could not change the choice between v3 and v4, in either direction, and it did
+not. The v4 and v3 rows differ by less than one possession's worth of spellF1, so the window
+says nothing about which is better; that was decided on the external games.
+
+**What came after look #5 (stated plainly).** The next day the team asked why the provided Smart
+Tagging was not an input, since the entry is judged on this match alone. That led to model v5 =
+v4 plus a weak team prior from the tagged possession phases. Look #5 had reported 7.6% of the
+window's frames with the wrong team, and that number was in our minds. It decided nothing: the
+case for the prior was made with a label-free comparison of our labels and the tags over the
+whole match (`tools/tagging_stats.py`), and its weight was set on 10 SkillCorner games with
+their phases of play as a stand-in stream (`ext/tags.py`), by a rule fixed before v5 was run on
+the real match.
+
+**The submitted v5 file (`1dcde4f6…`, frozen 2026-11-15) has not been scored on the window.** It
+keeps 99.1% of the v4 file's labels and `X` on the same frames, so the alignment check of look
+#5 carries over. v5 was not, and will not be, compared with v4 on the window.
