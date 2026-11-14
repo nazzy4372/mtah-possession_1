@@ -40,7 +40,7 @@ every part can be inspected.
 | Tactical ATD (players + ball) | **yes** | the only input to the labels |
 | Tactical ATD metadata XML | **yes** | team of each slot; home = first `<Team>` |
 | Published half blocks and kickoff anchors (`games.py`) | **checks only** | blocks decide X vs graded; anchors only *assert* that the detected kickoff is consistent (within 2 s), never set a label |
-| Smart Tagging | **no** | no external dataset has an independent automatic tagging stream to train or validate its weight on. SkillCorner's phases of play are the closest, but our SkillCorner labels derive from them, so any test would be circular. An unvalidated prior was judged riskier than none |
+| Smart Tagging | **check only** | not an input to the labels: no external dataset has an independent automatic tagging stream to train or validate its weight on. SkillCorner's phases of play are the closest, but our SkillCorner labels derive from them, so any test would be circular. An unvalidated prior was judged riskier than none. It is used after the fact as an independent, label-free consistency check of the finished file (section 6) |
 | Homography | **no** | the ATD is already in pitch coordinates; the homography only maps to pixels, which we do not use |
 | Video (tactical, broadcast) | **no** | not needed for a tracking-based method |
 | Broadcast ATD | **no** | not synchronised to the tactical timeline; the tactical ATD covers the whole match |
@@ -215,6 +215,17 @@ calls 9,219 frames dead that v3 called alive, and only 584 the other way. That i
 effect of the corrected noise model: stoppages in which the ball is untracked or carried are now
 recognised. With more dead ball, v4 reports 261 possessions against v3's 297. (v3 against v2
 agreed on 91.8% of graded frames.)
+
+**Smart Tagging as an independent check** (`tools/tagging_stats.py`; no ground truth, and the tags
+were never an input). Every tagged set piece is a restart, so a dead ball must precede it. Of the
+57 tagged set pieces on graded frames (throw-ins, corners, goal kicks, free kicks, kickoffs after
+a goal), the submitted file has a dead ball before 55, and its own restart falls inside the
+tagged interval for 51. The two without a dead ball are throw-ins. The tags cover about half of
+our stoppages (58 of 112 dead-ball runs end at a tagged set piece); offsides and most fouls are
+not tagged. Inside the tagged phases of settled possession, we give the ball to the tagged team
+on 92% (Build Up), 90% (Progression) and 85% (Creating Chances) of the frames we call alive.
+Two automatic sources that share no code agree this closely, so we left the file unchanged:
+forcing the last few set pieces would move a handful of frames on evidence we cannot validate.
 
 **Public window (correctness check, each file checked after it was frozen):**
 
