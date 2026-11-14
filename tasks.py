@@ -42,8 +42,8 @@ def _expected_sha(value):
         return None
     if value == "recorded":
         return RECORDED_SHA.read_text(encoding="utf-8").split()[0].lower()
-    if value == "recorded-v2":
-        return (ROOT / "config" / "submission_v2.sha256").read_text(
+    if value in ("recorded-v2", "recorded-v3"):          # the earlier frozen files
+        return (ROOT / "config" / "submission_{}.sha256".format(value[-2:])).read_text(
             encoding="utf-8").split()[0].lower()
     return value.lower()
 
