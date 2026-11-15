@@ -125,7 +125,34 @@ TRAINING = {
     # The v3 recipe (trained on full), held-out games scored on full2: the honest reference for
     # the two variants above. A fifth entry is the training condition when it differs.
     "touch_x2": ("touch", 1.0, False, "full2", "full"),
+    # Possession-balanced training on the v4 data (see BALANCE below).
+    "touch_f2_bal": ("touch", 1.0, False, "full2"),
+    "touch_f2_bal15": ("touch", 1.0, False, "full2"),
 }
+
+# Possession-balanced training. spellF1 counts every possession once, however long it is, but
+# per-frame training counts a 20 s possession twenty times more than a 1 s one, and the model
+# learns to ignore short possessions (on the external games it favours the right team on 37% of
+# the frames of possessions under 1.5 s and on 51% for 1.5-3 s; docs/ablation.md). Here every
+# possession shorter than `ref` seconds carries the same total weight as one of `ref` seconds:
+# all of its frames are kept and each weighs ref / (SUBSAMPLE * its length). Longer possessions
+# and dead ball are unchanged (every SUBSAMPLE-th frame, weight 1). Possessions shorter than
+# `floor` seconds are left unweighted: they may be too brief to be seen in the tracking at all.
+#   name -> (ref in s, floor in s)
+BALANCE = {"touch_f2_bal": (8.0, 0.0), "touch_f2_bal15": (8.0, 1.5)}
+FPS = 25.0
+
+
+def possession_seconds(gt):
+    """Per frame: the length in seconds of the H or A run it lies in (0 for dead ball and X)."""
+    change = np.flatnonzero(gt[1:] != gt[:-1]) + 1
+    starts = np.concatenate([[0], change])
+    ends = np.concatenate([change, [len(gt)]])
+    out = np.zeros(len(gt))
+    for a, b in zip(starts, ends):
+        if gt[a] in (pm.H, pm.A):
+            out[a:b] = (b - a) / FPS
+    return out
 
 
 def resolve(variant):
@@ -148,16 +175,24 @@ def all_variants():
     return sorted(VARIANTS) + sorted(TRAINING)
 
 
-def training_rows(datasets, keep, near_weight=1.0, dense=False):
+def training_rows(datasets, keep, near_weight=1.0, dense=False, balance=None):
     """(X, y, weights or None): subsampled graded rows of several games plus the H <-> A mirrored
-    copy. With near_weight > 1 or dense, frames near a true change count for more."""
+    copy. With near_weight > 1 or dense, frames near a true change count for more. With
+    `balance` = (ref, floor), short possessions are kept whole and weighted up (see BALANCE)."""
     xs, ys, ws = [], [], []
-    emphasise = near_weight != 1.0 or dense
+    emphasise = near_weight != 1.0 or dense or balance is not None
     for d in datasets:
         names = list(d["names"])
         cols = [names.index(k) for k in keep]
         usable = d["graded"] & (d["gt"] != pm.X)
-        if emphasise:
+        if balance is not None:
+            ref, floor = balance
+            seconds = possession_seconds(d["gt"])
+            short = usable & (seconds > 0) & (seconds < ref) & (seconds >= floor)
+            rows = np.flatnonzero(usable & ((np.arange(len(usable)) % SUBSAMPLE == 0) | short))
+            w = np.where(short[rows], ref / (SUBSAMPLE * np.maximum(seconds[rows], 1.0 / FPS)), 1.0)
+            ws += [w, w]
+        elif emphasise:
             _, near = change_targets(d["gt"])
             idx = np.arange(len(usable))
             pick = usable & ((idx % SUBSAMPLE == 0) | near) if dense else None
@@ -330,7 +365,7 @@ def logo(variant="all", verbose=True):
     for i, g in enumerate(games):
         started = time.perf_counter()
         X, y, w = training_rows([d for j, d in enumerate(train_sets) if j != i], keep,
-                                near_weight, dense)
+                                near_weight, dense, BALANCE.get(variant))
         booster = fit(X, y, weight=w)
         d = eval_sets[i]
         names = list(d["names"])
@@ -431,7 +466,7 @@ def final_model(variant="touch", with_change=False, version="v3"):
     keep = VARIANTS[feature_variant](list(train_sets[0]["names"]))
     MODELS.mkdir(exist_ok=True)
 
-    X, y, w = training_rows(train_sets, keep, near_weight, dense)
+    X, y, w = training_rows(train_sets, keep, near_weight, dense, BALANCE.get(variant))
     fit(X, y, weight=w).save_model(str(MODELS / "emission_{}.txt".format(version)))
     if w is None:
         prior = np.bincount(y, minlength=3)[:3].astype(float) / len(y)

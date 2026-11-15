@@ -74,6 +74,42 @@ def test_training_variants_name_their_noise_conditions():
     assert pipeline.default_method() in (pipeline.SUBMITTED, pipeline.methods()[0])
 
 
+def test_possession_balanced_weights_give_short_possessions_equal_mass():
+    import sys
+
+    from mtah.official import REPO_ROOT, pm
+    sys.path.insert(0, str(REPO_ROOT))
+    from ext import train
+
+    # X | H 2 s | A 1 s | D | H 12 s | X
+    gt = np.array([pm.X] * 3 + [pm.H] * 50 + [pm.A] * 25 + [pm.D] * 40 + [pm.H] * 300 + [pm.X] * 2,
+                  dtype=np.int8)
+    seconds = train.possession_seconds(gt)
+    assert sorted(set(seconds.tolist())) == [0.0, 1.0, 2.0, 12.0]
+    assert (seconds[gt == pm.D] == 0).all() and (seconds[gt == pm.X] == 0).all()
+
+    n = len(gt)
+    d = {"names": np.array(["f"]), "X": np.arange(n, dtype=np.float32)[:, None], "gt": gt,
+         "graded": gt != pm.X}
+    orig = train.learn_features.swap_teams
+    train.learn_features.swap_teams = lambda names, X: X          # one dummy feature: no mirror
+    try:
+        X, y, w = train.training_rows([d], ["f"], balance=(8.0, 0.0))
+        rows = X[:len(X) // 2, 0].astype(int)
+        w = w[:len(w) // 2]
+        mass = {k: float(w[seconds[rows] == k].sum()) for k in (1.0, 2.0, 12.0)}
+        assert mass[1.0] == pytest.approx(mass[2.0]) == pytest.approx(8.0 * 25 / train.SUBSAMPLE)
+        assert mass[12.0] == pytest.approx(12.0 * 25 / train.SUBSAMPLE)   # long: unchanged
+        assert (w[gt[rows] == pm.D] == 1).all()
+        # with a floor of 1.5 s the 1 s possession is left as it was
+        X2, _, w2 = train.training_rows([d], ["f"], balance=(8.0, 1.5))
+        rows2 = X2[:len(X2) // 2, 0].astype(int)
+        assert float(w2[:len(w2) // 2][seconds[rows2] == 1.0].sum()) == 25 / train.SUBSAMPLE
+    finally:
+        train.learn_features.swap_teams = orig
+    assert set(train.BALANCE) <= set(train.TRAINING)
+
+
 def test_team_swap_is_an_involution_and_mirrors(built):
     _, names, X = built
     Y = learn_features.swap_teams(names, X)

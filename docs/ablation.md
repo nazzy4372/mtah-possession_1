@@ -234,3 +234,44 @@ does not recover missed possessions (the predicted possession count does not mov
 match our agreement with the tagging evidence is close to the "real-like" and "10% wrong team"
 rows, far from the 20% and 30% rows. The stand-in is imperfect (a different vendor's phases),
 which is why the rule buys safety before gain.
+
+## Where the score is lost, and possession-balanced training (tried, not shipped)
+
+**Loss budget** on the 13 external games (v4, leave-one-game-out, frozen settings; mean spellF1
+0.439):
+
+| true possession length | share of all | found (IoU ≥ 0.5) | missed entirely | overlapped but merged or misplaced | frames where the model favours the true team |
+|---|---|---|---|---|---|
+| under 1.5 s | 18% | 2% | 73% | 25% | 37% |
+| 1.5–3 s | 15% | 14% | 54% | 32% | 51% |
+| 3–8 s | 28% | 32% | 31% | 36% | 67% |
+| 8–20 s | 25% | 61% | 7% | 33% | 83% |
+| over 20 s | 15% | 73% | 1% | 26% | 91% |
+
+- **Boundary timing is not the problem.** Of the true changes that have one of ours within 2 s,
+  the median error is 0.44 s with no bias (median signed error 0.00 s). Moving every such change
+  onto the true frame would give 0.471 (+0.03).
+- **Short possessions are.** Writing every true possession under 3 s into our output would give
+  0.695. A missed short possession costs three matches: itself, and the two neighbours of the
+  other team that get merged into one long spell (our overlapping spell is 2–3 times too long).
+- **The cause is the per-frame model, not the decoder.** The decoder finds what the summed
+  evidence supports; for possessions under 3 s the evidence favours the wrong team as often as
+  the right one.
+
+**Possession-balanced training.** spellF1 counts every possession once; per-frame training
+counts a 20 s possession twenty times more than a 1 s one. Two variants on the v4 data
+(`ext/train.py`, `BALANCE`) keep every frame of a possession shorter than 8 s and weight it so
+that the possession carries the mass of an 8 s one:
+
+| variant | nested 2-fold spellF1 | against v4 (0.4385), per game | predicted / true possessions |
+|---|---|---|---|
+| v4 | 0.4385 | | 0.63 |
+| `touch_f2_bal`: every possession under 8 s | 0.4403 | better on 8 of 13, mean +0.002, t = 0.3 | 0.69 |
+| `touch_f2_bal15`: only 1.5–8 s (shorter ones left alone) | 0.4356 | better on 3 of 13, mean −0.003 | 0.67 |
+
+Neither passes the rule (a clear win on most games), so v4's model stays. The balanced models
+do predict more possessions, but the extra ones match the truth no better than chance of a
+match, and the tuned decoder answers with a higher switch cost. Together with the earlier
+near-change weighting (+0.007, rejected), this is the third reweighting that fails: the features
+do not separate a short controlled possession from a touch in a duel, and reweighting cannot add
+information that is not there. The ball is also untracked on about a third of those frames.

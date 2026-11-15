@@ -374,7 +374,7 @@ The last three write the stand-in tagging files, run the tagging test and freeze
 `config/final_v5.yaml`.
 (v3: `cache`, `logo --variant touch`, `final-v3 --variant touch`, `tune --variant touch --freeze`.)
 
-`python tasks.py test` runs the unit and end-to-end tests (71) on synthetic matches in the exact
+`python tasks.py test` runs the unit and end-to-end tests (72) on synthetic matches in the exact
 ATD format.
 
 **Development note.** The code was written with an AI coding assistant. In line with the terms,
