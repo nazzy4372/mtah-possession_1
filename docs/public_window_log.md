@@ -15,6 +15,7 @@ the technical document can state how many times it was used and why.
 | 4 | 2026-11-14 | after v3 was frozen | team member (`tools/public_errors.py`) | understanding the organisers' definitions (CHALLENGE.md: "use it to understand what is expected"): which ground-truth segments the frozen v3 file gets wrong | one row per ground-truth segment (21) and per segment of ours (20), with label shares, match verdicts and label-free context. Findings: most "dead called alive" frames come from one 20 s stoppage in which the ball is tracked and moving; 5 of the 7 missed possessions last under 4 s. |
 | 5 | 2026-11-14 | after v4 was frozen, reproduced and packaged | team member (`tools/public_check.py --detail --force`, `tools/public_errors.py`) | correctness check of the **submitted v4** file (`0432a1ed…`), at the team's request, with the per-segment breakdown | scorer detail block: macroF1 0.7979, spellF1 0.5867, accuracy 0.830, per-class F1 H 0.866 / A 0.841 / D 0.686, D recall 0.524 (precision 0.996), alive/dead F1 0.945, team accuracy (both alive) 0.905, 13 possessions of mean 20.7 s (truth: 17 of 14.2 s), latency −7.0 frames. Per segment: 10 of 17 possessions matched; 5 of the 7 missed last under 4 s; of the 4 stoppages two are found (83%, 92%), one of 5 s is played through, one of 20 s with a tracked, moving ball is found for 11%. |
 | 6 | 2026-11-15 | after v5 was frozen, reproduced and packaged | team member, by hand in a spreadsheet | understanding one disagreement: the frames of the 20 s stoppage of look #5 that the submitted file labels alive | about 265 consecutive frames of that one stoppage, where the truth is dead ball and the file gives one team and then the other. No score was computed. The explanation (ball tracked, moving and inside the pitch, among slow players) was already known from looks #4 and #5. |
+| 7 | 2026-11-15 | after v5 was frozen, reproduced and packaged | team member (`tools/public_check.py --detail --force`) | final correctness check of the **submitted v5** file (`1dcde4f6…`), at the team's request | scorer detail block: macroF1 0.7929, spellF1 0.5882, accuracy 0.823, per-class F1 H 0.856 / A 0.837 / D 0.686, D recall 0.524 (precision 0.996), alive/dead F1 0.945, team accuracy (both alive) 0.897, 17 possessions of mean 15.8 s (truth: 17 of 14.2 s), 11 matched at IoU 0.5, latency −5.0 frames. |
 
 No parameter, threshold or model choice was fitted to the window or selected with it. v3 was
 chosen over v2 on the external games alone, and frozen with its SHA-256 recorded, **before** look
@@ -46,7 +47,13 @@ whole match (`tools/tagging_stats.py`), and its weight was set on 10 SkillCorner
 their phases of play as a stand-in stream (`ext/tags.py`), by a rule fixed before v5 was run on
 the real match.
 
-**The submitted v5 file (`1dcde4f6…`, frozen 2026-11-15) has not been scored on the window.** It
-keeps 99.1% of the v4 file's labels and `X` on the same frames, so the alignment check of look
-#5 carries over. v5 was not, and will not be, compared with v4 on the window. Look #6 inspected
-one stoppage of it by hand, computed no score, and changed nothing.
+**The submitted v5 file (`1dcde4f6…`, frozen 2026-11-15) was scored on the window once, in look
+#7**, after it had been chosen on the external games, frozen with its SHA-256 recorded,
+reproduced byte-for-byte in a second run and packaged for upload. Before that, look #6 had
+inspected one stoppage of it by hand without computing a score. An earlier version of this log
+said v5 would not be scored on the window; the team asked for a final accuracy check, and it was
+agreed before the look that the result could not change which file is submitted, in either
+direction. It did not: v5 against v4 is spellF1 0.588 against 0.587, frame accuracy 0.823
+against 0.830, team accuracy 0.897 against 0.905. Those differences are far inside the noise of
+17 possessions (one possession moves spellF1 by about 0.06), so the window says nothing about
+which is better. v5 remains the submission because it was chosen on the external games.

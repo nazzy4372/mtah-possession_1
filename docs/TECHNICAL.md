@@ -165,14 +165,13 @@ and ball visibility only: no label, ground truth or public-window score.
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
 - **Public 5-minute window:** used as a correctness check and, as CHALLENGE.md invites, to
-  understand what is expected. It was looked at **six times**: twice on the frozen v2 file (the
-  scoreboard, then its frame-level breakdown), once on the frozen v3 file, once per segment on
-  the v3 file, and once on the v4 file (scoreboard and per segment). The v4 look came after v4
-  had been chosen on the external games, frozen, reproduced and packaged for upload. One earlier
-  run scored only the upstream baselines, to test the tool. **The submitted v5 file has never
-  been scored on it**; it differs from the v4 file on 0.9% of graded frames. The sixth look was a
-  team member reading one stoppage of the v5 file against the truth by hand; nothing changed. See
-  `docs/public_window_log.md`.
+  understand what is expected. It was looked at **seven times**: twice on the frozen v2 file
+  (the scoreboard, then its frame-level breakdown), once on the frozen v3 file, once per segment
+  on the v3 file, once on the v4 file (scoreboard and per segment), once by hand on one stoppage
+  of the v5 file, and once on the submitted v5 file as a final check. Each scored file had been
+  chosen on the external games, frozen, reproduced and, for v4 and v5, packaged for upload
+  before its look, and no look changed which file was submitted. One earlier run scored only the
+  upstream baselines, to test the tool. See `docs/public_window_log.md`.
 - **What the window did and did not influence.** No parameter, threshold or model choice was ever
   fitted to it or selected with it: v3 was chosen over v2, and v4 over v3, on the external games
   alone. The fourth look did prompt a question. Most of our dead-ball misses in the window came
@@ -279,12 +278,12 @@ would move a handful of frames. Inside the tagged possession phases the same che
 agreement on the team (Build Up 92%, Progression 90%, Creating Chances 85%, Attacking Transition
 68% of the frames we call alive), which is where the v5 prior acts.
 
-**Public window (correctness check of the earlier files, each checked after it was frozen; the
-submitted v5 file was not scored on it):**
+**Public window (correctness check, each file checked after it was frozen):**
 
 | on the public 5 minutes (7,500 frames, 17 possessions) | macroF1 | spellF1 | frame accuracy | alive/dead F1 | team accuracy (both alive) | possessions |
 |---|---|---|---|---|---|---|
-| earlier file, v4 (v5 keeps 99.1% of its labels) | 0.798 | 0.587 | 0.830 | 0.945 | 0.905 | 13 of mean 20.7 s |
+| **submitted file, v5** | **0.793** | **0.588** | 0.823 | 0.945 | 0.897 | 17 of mean 15.8 s |
+| earlier file, v4 | 0.798 | 0.587 | 0.830 | 0.945 | 0.905 | 13 of mean 20.7 s |
 | earlier file, v3 | 0.793 | 0.563 | 0.826 | 0.942 | 0.905 | 15 of mean 17.8 s |
 | earlier file, v2 | 0.783 | 0.513 | 0.814 | 0.941 | 0.892 | 15 of mean 17.8 s |
 | ground truth | | | | | | 17 of mean 14.2 s |
@@ -294,9 +293,14 @@ The check shows that frames are aligned, the file is well-formed and the labels 
 intend. With only 17 possessions it cannot rank or tune anything: one possession more or less
 moves spellF1 by about 0.06, more than the difference between any two of our rows. No setting was
 changed after any look, and each version had been chosen on the external games and frozen before
-its check.
+its check. The v5 and v4 rows show exactly that: v5 is a hair higher on spellF1 and a hair lower
+on frame accuracy and team accuracy, and neither difference means anything on 17 possessions.
+v5 was kept because it had been chosen beforehand, not because of this row. Its dead-ball calls
+in the window are identical to v4's (recall 0.52, precision 1.00); the tagging prior changes
+team calls only. It reports 17 possessions, the true count, of which 11 match at IoU 0.5.
 
-What the v4 file gets wrong on this window, by frames: 83.0% correct, 9.3% dead ball called
+What the v4 file gets wrong on this window, by frames (the per-segment study was not repeated
+for v5): 83.0% correct, 9.3% dead ball called
 alive, 7.6% wrong team, and 3 frames alive called dead.
 - **Short possessions.** 10 of the 17 possessions are matched. Five of the seven missed ones last
   under 4 s (0.8 s to 3.6 s). This is the under-segmentation measured on external games
