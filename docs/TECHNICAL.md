@@ -165,12 +165,13 @@ and ball visibility only: no label, ground truth or public-window score.
   tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
   per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
 - **Public 5-minute window:** used as a correctness check and, as CHALLENGE.md invites, to
-  understand what is expected. It was looked at **five times**: twice on the frozen v2 file (the
+  understand what is expected. It was looked at **six times**: twice on the frozen v2 file (the
   scoreboard, then its frame-level breakdown), once on the frozen v3 file, once per segment on
   the v3 file, and once on the v4 file (scoreboard and per segment). The v4 look came after v4
   had been chosen on the external games, frozen, reproduced and packaged for upload. One earlier
   run scored only the upstream baselines, to test the tool. **The submitted v5 file has never
-  been scored on it**; it differs from the v4 file on 0.9% of graded frames. See
+  been scored on it**; it differs from the v4 file on 0.9% of graded frames. The sixth look was a
+  team member reading one stoppage of the v5 file against the truth by hand; nothing changed. See
   `docs/public_window_log.md`.
 - **What the window did and did not influence.** No parameter, threshold or model choice was ever
   fitted to it or selected with it: v3 was chosen over v2, and v4 over v3, on the external games

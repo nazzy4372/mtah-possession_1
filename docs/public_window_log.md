@@ -14,6 +14,7 @@ the technical document can state how many times it was used and why.
 | 3 | 2026-11-14 | after v3 was frozen | team member (`tools/public_check.py --detail --force`) | correctness check of the **frozen v3** file (`f6fb5445…`), the file to be uploaded, at the team's request | scorer detail block: macroF1 0.7932, spellF1 0.5625, accuracy 0.826, per-class F1 H 0.863 / A 0.839 / D 0.677, D recall 0.527, alive/dead F1 0.942, team accuracy (both alive) 0.905, 15 possessions of mean 17.8 s (truth: 17 of 14.2 s), latency −0.8 frames |
 | 4 | 2026-11-14 | after v3 was frozen | team member (`tools/public_errors.py`) | understanding the organisers' definitions (CHALLENGE.md: "use it to understand what is expected"): which ground-truth segments the frozen v3 file gets wrong | one row per ground-truth segment (21) and per segment of ours (20), with label shares, match verdicts and label-free context. Findings: most "dead called alive" frames come from one 20 s stoppage in which the ball is tracked and moving; 5 of the 7 missed possessions last under 4 s. |
 | 5 | 2026-11-14 | after v4 was frozen, reproduced and packaged | team member (`tools/public_check.py --detail --force`, `tools/public_errors.py`) | correctness check of the **submitted v4** file (`0432a1ed…`), at the team's request, with the per-segment breakdown | scorer detail block: macroF1 0.7979, spellF1 0.5867, accuracy 0.830, per-class F1 H 0.866 / A 0.841 / D 0.686, D recall 0.524 (precision 0.996), alive/dead F1 0.945, team accuracy (both alive) 0.905, 13 possessions of mean 20.7 s (truth: 17 of 14.2 s), latency −7.0 frames. Per segment: 10 of 17 possessions matched; 5 of the 7 missed last under 4 s; of the 4 stoppages two are found (83%, 92%), one of 5 s is played through, one of 20 s with a tracked, moving ball is found for 11%. |
+| 6 | 2026-11-15 | after v5 was frozen, reproduced and packaged | team member, by hand in a spreadsheet | understanding one disagreement: the frames of the 20 s stoppage of look #5 that the submitted file labels alive | about 265 consecutive frames of that one stoppage, where the truth is dead ball and the file gives one team and then the other. No score was computed. The explanation (ball tracked, moving and inside the pitch, among slow players) was already known from looks #4 and #5. |
 
 No parameter, threshold or model choice was fitted to the window or selected with it. v3 was
 chosen over v2 on the external games alone, and frozen with its SHA-256 recorded, **before** look
@@ -47,4 +48,5 @@ the real match.
 
 **The submitted v5 file (`1dcde4f6…`, frozen 2026-11-15) has not been scored on the window.** It
 keeps 99.1% of the v4 file's labels and `X` on the same frames, so the alignment check of look
-#5 carries over. v5 was not, and will not be, compared with v4 on the window.
+#5 carries over. v5 was not, and will not be, compared with v4 on the window. Look #6 inspected
+one stoppage of it by hand, computed no score, and changed nothing.
