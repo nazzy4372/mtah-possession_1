@@ -17,7 +17,8 @@ from typing import List
 
 import numpy as np
 
-from mtah import baseline_port, decode, emission, features, halves, io_atd, refine
+from mtah import baseline_port, deadball, decode, emission, features, halves, io_atd, refine
+from mtah.deadball import DeadballParams
 from mtah.decode import DecoderParams
 from mtah.emission import EmissionParams
 from mtah.refine import RefineParams
@@ -54,9 +55,12 @@ class Params:
     decoder: DecoderParams = DecoderParams()
     refine: RefineParams = RefineParams()
     use_refine: bool = True
+    deadball: DeadballParams = DeadballParams()     # method v1d only
 
 
-METHODS = ("v2", "v1", "baseline")      # v5, v4, v3 are added when their model and config exist
+# v5, v4, v3 are added when their model and config exist. v1d = the v1 rules plus the dead-ball
+# evidence of deadball.py (an experiment, never the submission).
+METHODS = ("v2", "v1", "v1d", "baseline")
 SUBMITTED = "v5"                       # the model behind the recorded submission SHA-256
 
 
@@ -73,10 +77,11 @@ def default_method() -> str:
 
 
 def label_tracking(tracking, spec: GameSpec, method: str = None, params: Params = Params(),
-                   kickoffs=None, tag_evidence=None):
+                   kickoffs=None, tag_evidence=None, set_piece_starts=None):
     """(labels, kickoffs) for an in-memory Tracking. The evaluation harness calls this directly so
     it can corrupt a Tracking (ball dropout) before labelling. `tag_evidence` is the per-frame
-    team evidence of the Smart Tagging (emission_v5.tag_evidence), needed by method v5 only."""
+    team evidence of the Smart Tagging (emission_v5.tag_evidence), needed by method v5 only.
+    `set_piece_starts` are the tagged set-piece start frames, optional support for v1d."""
     method = method or default_method()
     if kickoffs is None:
         kickoffs = halves.detect_kickoffs(tracking, spec)
@@ -84,11 +89,14 @@ def label_tracking(tracking, spec: GameSpec, method: str = None, params: Params 
             raise KickoffInconsistent(kickoffs, spec.fps)
     if method == "baseline":
         raw = baseline_port.placeholder_labels(tracking)
-    elif method in ("v1", "v2"):
+    elif method in ("v1", "v1d", "v2"):
         F = features.compute(tracking, spec)
-        if method == "v1":
+        if method in ("v1", "v1d"):
             logp, dec = emission.rules_v1(F, params.emission), params.decoder
             use_refine = params.use_refine
+            if method == "v1d":
+                evidence = deadball.compute(tracking, spec, params.deadball, set_piece_starts)
+                logp = deadball.add_evidence(logp, evidence, params.deadball.weight)
         else:
             from mtah import emission_v2
             logp, dec = emission_v2.emissions(tracking, spec, F), emission_v2.decoder_params()

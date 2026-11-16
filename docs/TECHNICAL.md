@@ -326,6 +326,11 @@ alive, 7.6% wrong team, and 3 frames alive called dead.
 - **Smart Tagging is used cautiously.** The team prior was validated on another vendor's phases
   of play, not on Metrica's own tags, so its weight is deliberately small. With Smart Tagging on
   other games it could carry more weight and also inform restarts.
+- **Dead ball with a tracked, moving ball** (a ball carried or kicked back during a stoppage) is
+  the weakest dead-ball case. A detector of sudden collective slowdowns with a penalty-area
+  exclusion (`src/mtah/deadball.py`) was built and tested on the external games; it lowered
+  spellF1 (0.439 → 0.435 at its mildest setting) and is not shipped. Possession-balanced
+  training, aimed at the short possessions, did not help either. Details in `docs/ablation.md`.
 - **Kickoff timing** is a few frames off (half 2: about 7 frames early), and boundaries are not
   refined for the learned model because snapping hurt it on external games.
 - **Noise model gaps.** It does not reproduce the real 2.4% of frames with 23 or more tracks, and
@@ -378,7 +383,7 @@ The last three write the stand-in tagging files, run the tagging test and freeze
 `config/final_v5.yaml`.
 (v3: `cache`, `logo --variant touch`, `final-v3 --variant touch`, `tune --variant touch --freeze`.)
 
-`python tasks.py test` runs the unit and end-to-end tests (72) on synthetic matches in the exact
+`python tasks.py test` runs the unit and end-to-end tests (83) on synthetic matches in the exact
 ATD format.
 
 **Development note.** The code was written with an AI coding assistant. In line with the terms,

@@ -48,9 +48,10 @@ LGB_PARAMS = {
 NUM_ROUNDS = 250
 
 def _touch(names):
-    """The frozen v3 feature set: everything except raw speed and the later gap group."""
+    """The frozen v3 feature set: everything except raw speed and the later gap and dead-ball
+    groups."""
     return [n for n in names if n not in learn_features.GROUP_SPEED_RAW
-            and n not in learn_features.GROUP_GAP]
+            and n not in learn_features.GROUP_GAP and n not in learn_features.GROUP_DEADBALL]
 
 
 def _m4(names):
@@ -63,18 +64,24 @@ VARIANTS = {
     "noshape": lambda names: [n for n in _m4(names) if n not in learn_features.GROUP_SHAPE],
     "rawspeed": lambda names: [n for n in names if not n.startswith("ps_rank") and n != "ps_z"
                                and n not in learn_features.GROUP_TOUCH
-                               and n not in learn_features.GROUP_GAP],
+                               and n not in learn_features.GROUP_GAP
+                               and n not in learn_features.GROUP_DEADBALL],
     # M5: without the widest (+/-5 s) windows
     "short": lambda names: [n for n in _m4(names) if not n.endswith("_m5")],
     # post-M5: plus touch-sequence and ball-kinematics features around the frame
     "touch": _touch,
     # plus ball-gap and stoppage cues; only for training data with the "speed" ball model
-    "gap": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW],
+    "gap": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW
+                          and n not in learn_features.GROUP_DEADBALL],
+    # plus the slowdown detector's signals (deadball.py); needs caches built at FEATURE_VERSION 4
+    "dead": lambda names: [n for n in names if n not in learn_features.GROUP_SPEED_RAW
+                           and n not in learn_features.GROUP_GAP],
 }
-FEATURE_VERSION = 3   # bump when learn_features.build changes
-# Caches of the older condition keep their version: the columns the older variants use have not
-# changed, and their models (v2, v3) were trained from those caches.
-CACHE_VERSION = {"full": 2}
+FEATURE_VERSION = 4   # bump when learn_features.build changes
+# Existing caches keep their version: the columns the frozen variants use have not changed, and
+# their models (v2, v3 from `full`; v4 from `full2`) were trained from those caches. A variant
+# that needs the newer columns (`dead`) needs these entries raised and the caches rebuilt.
+CACHE_VERSION = {"full": 2, "full2": 3}
 
 
 # -- feature cache -------------------------------------------------------------------------------

@@ -237,6 +237,10 @@ def build(tracking, spec, F=None):
         cols["spread_" + tname] = feat._smooth(spread, s(1))
         cols["tracked_" + tname] = tcount
 
+    # --- dead-ball evidence from a collective slowdown (deadball.py), for later models only
+    from mtah import deadball
+    cols.update(deadball.features(deadball.compute(tracking, spec)))
+
     names = list(cols)
     X = np.column_stack([np.asarray(cols[k], dtype=np.float64) for k in names]).astype(np.float32)
     graded = spec.graded_mask()
@@ -258,6 +262,11 @@ SIGNED = ("margin", "margin_m05", "margin_m1", "margin_m3", "touch_signed", "sha
 # Ball-gap and stoppage cues, for models trained on the "speed" ball model only.
 GROUP_GAP = ("gap_len", "gap_elapsed", "gap_remaining", "last_seen_line", "next_seen_line",
              "rank_at_last_seen", "known_share_m5", "ps_drop3", "since_out")
+
+# The intermediate signals of the slowdown detector (deadball.FEATURES). No shipped model uses
+# them; they are kept out of every frozen feature set.
+GROUP_DEADBALL = ("db_ratio", "db_candidate", "db_box", "db_cue_out", "db_cue_still",
+                  "db_cue_missing", "db_score")
 
 # Added after M5 (change-of-possession evidence). Kept as a group so the frozen M4 feature set
 # ("all") stays reproducible.

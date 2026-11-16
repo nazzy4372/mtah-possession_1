@@ -239,7 +239,7 @@ def main(argv=None):
     p.add_argument("--spec", help="game_spec.json for a non-BAR-ATH bundle")
     p.add_argument("--expect-sha256", metavar="HEX|recorded",
                    help="fail unless the file has this SHA-256 ('recorded' = the frozen one)")
-    p.add_argument("--method", choices=("v5", "v4", "v3", "v2", "v1", "baseline"),
+    p.add_argument("--method", choices=("v5", "v4", "v3", "v2", "v1", "v1d", "baseline"),
                    help="default: the submitted model (v5: v4 plus a team prior from the Smart "
                         "Tagging). v4, v3 and v2 reproduce the earlier frozen files; v1 is the "
                         "rules; baseline is the ported upstream baseline")

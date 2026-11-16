@@ -275,3 +275,56 @@ match, and the tuned decoder answers with a higher switch cost. Together with th
 near-change weighting (+0.007, rejected), this is the third reweighting that fails: the features
 do not separate a short controlled possession from a touch in a duel, and reweighting cannot add
 information that is not there. The ball is also untracked on about a third of those frames.
+
+## Dead-ball evidence from a collective slowdown (tried, not shipped)
+
+`src/mtah/deadball.py` turns a sudden, collective slowdown of the players into evidence for the
+dead-ball state. It never writes a label: its score is added to the dead-ball emission and the
+decoder weighs it.
+
+- **Signal.** Mean of the 7 highest player speeds, smoothed with a centred 0.5 s rolling median,
+  divided by its rolling median over the previous 10 s (leaving out the last second). A
+  slowdown candidate is a ratio at or below 0.60 for at least 1 s.
+- **Penalty-area exclusion.** A candidate whose ball (or its position seen within the last 2 s)
+  is inside either penalty area or its arc is dropped: a goalkeeper holding the ball slows
+  everyone down while the ball is alive.
+- **Timing.** The dead stretch starts up to 3 s before the slowdown, at the ball crossing a line,
+  else a sharp ball stop, else the ball disappearing. It ends when the ball moves off after
+  resting or the top speeds recover to 0.8 of the baseline.
+- **Guard.** A candidate counts only with a second cue: ball outside the pitch, ball at rest for
+  1 s, ball untracked for 1 s, or a tagged set piece starting within 3 s.
+
+All numbers are parameters (`DeadballParams`) and were left at their first values: none was
+tuned. Ablation on the 13 external games under `full2` noise (`python -m ext.deadball_ablation`;
+means; the external tagging stand-in has no set pieces, so the tag cue never fires here):
+
+| variant | dead-ball precision | dead-ball recall | alive/dead F1 | spellF1 | games better |
+|---|---|---|---|---|---|
+| rules v1, no detector | 0.818 | 0.900 | 0.882 | 0.312 | |
+| rules v1 + detector | 0.761 | 0.926 | 0.849 | 0.296 | 0 of 13 |
+| rules v1 + detector, no penalty-area exclusion | 0.738 | 0.935 | 0.832 | 0.289 | 0 of 13 |
+| rules v1 + detector, no second-cue guard | 0.744 | 0.927 | 0.838 | 0.284 | 0 of 13 |
+| the detector alone (score > 0 as a label) | 0.747 | 0.597 | | | |
+| v4 (learned, leave-one-game-out), no detector | 0.899 | 0.944 | 0.937 | 0.439 | |
+| v4 + detector, weight 0.5 | 0.883 | 0.954 | 0.932 | 0.435 | 5 of 13 |
+| v4 + detector, weight 1 | 0.865 | 0.959 | 0.924 | 0.431 | 4 of 13 |
+| v4 + detector, weight 2 | 0.827 | 0.964 | 0.903 | 0.414 | 2 of 13 |
+| v4 + detector, weight 1, no penalty-area exclusion | 0.854 | 0.962 | 0.918 | 0.428 | 3 of 13 |
+
+Over the 13 games the detector saw 2,012 slowdown candidates: 323 were dropped by the
+penalty-area rule, 275 for lack of a second cue, 1,414 accepted (534 at low confidence). Cues on
+the accepted ones: ball untracked 1,356, ball outside 428, ball at rest 150. Starts: line
+crossing 240, ball stop 50, ball disappearing 190, slowdown onset 934.
+
+**Reading.** The two safeguards work as designed: removing the penalty-area exclusion or the
+second-cue guard makes every number worse. But the detector as a whole is not adopted. It finds
+a little more dead ball (recall +0.01 to +0.03) at a larger cost in false dead ball, because its
+own precision (0.75) is below that of the model it is added to (0.82 for the rules, 0.90 for
+v4), and spellF1 falls in every configuration. Two reasons. First, the learned model already
+uses the same information (relative player speed with past and future windows, ball outside,
+ball at rest), so the detector repeats evidence instead of adding it. Second, under realistic
+ball visibility the ball is untracked through most slow play, so "ball untracked for 1 s" fires
+for 96% of accepted candidates and hardly filters anything. The code, the tests on hand-built
+sequences and the aggregate tool (`tools/deadball_stats.py`) are kept; the signals are exposed
+to the learned-model feature matrix (`learn_features.GROUP_DEADBALL`) but belong to no shipped
+feature set. A learned variant on those features (`VARIANTS["dead"]`) was not trained.
