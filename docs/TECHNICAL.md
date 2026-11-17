@@ -1,344 +1,269 @@
-# Ball possession from automatic tracking: technical document
+# Ball possession from tracking: Nuttertools
 
-**Team Nuttertools.** More than a Hack 2027, Phase 1. Match: FC Barcelona (H) vs Athletic Club (A).
-Code: this repository; every command is listed in section 8. Submission file: `Nuttertools.csv`,
-produced by model v5 (SHA-256 `1dcde4f6111998025c7a75f554f754e9d699dbb5c9e0330146943de759300fc6`).
+More than a Hack 2027, Phase 1. FC Barcelona (H) vs Athletic Club (A).
 
-## 1. Approach, and why
+Submitted file: `Nuttertools.csv`, made by our model v5. SHA-256
+`1dcde4f6111998025c7a75f554f754e9d699dbb5c9e0330146943de759300fc6`. Section 8 has the commands
+to rebuild it.
 
-The task is scored on **spellF1**: whole possessions matched by temporal overlap. Two failure modes
-dominate that metric. Per-frame decisions flicker and invent possessions; heavy smoothing merges
-real ones. The method is therefore framed as **per-frame evidence followed by a decoder that
-prices every change of state**:
+## 1. What we did and why
 
-1. **Parse** the tactical ATD with a fast numpy reader (bit-exact with the upstream baseline's own
-   reader on all 199,319 frames).
-2. **Detect each kickoff** from the tracking (section 4). Frames before it inside a graded half are
-   dead ball; ungraded frames are `X`.
-3. **Per-frame evidence.** 59 collective, identity-free features: relative player speed, ball
-   speed and position, proximity of each team to the ball, team shape, and the **touch sequence
-   around the frame**: which team is on the ball in the seconds before and after, and whether
-   the ball's velocity has just changed. Most have rolling windows. A small LightGBM model maps
-   them to p(H, A, D).
-4. **Smart Tagging as a team prior.** Inside a tagged phase of settled possession for one team,
-   the other team's score is lowered slightly on every frame (section 4). The dead-ball score is
-   left to the tracking.
-5. **Decode** each half with a Viterbi decoder over {H, A, D}. Switching team costs `c_switch`,
-   the ball dying costs `c_die`, a restart costs `c_restart`. A change of state happens only when
-   the evidence for it, summed over its frames, outweighs its cost. This is our reading of
-   "controlled possession": a touch, deflection or aerial duel does not move possession; a
-   sustained change does.
-6. **Write** the CSV: LF line endings, exact row contract, byte-identical on every run.
+spellF1 rewards getting whole possessions right, start to end. Two things kill it: labels that
+flicker frame to frame (lots of fake little possessions), and smoothing so heavy that real
+possessions get merged. So we split the problem in two. First we work out, frame by frame, how
+likely H, A and dead ball are. Then a decoder picks the most likely sequence, and every change of
+state has a price.
 
-Why this design rather than an end-to-end sequence model: we have no labelled data from this match
-and must not create any. All learning therefore happens on other games, and **the domain gap is
-the main risk, not model capacity**. A small model on robust, collective features, with the
-temporal structure written explicitly into the decoder, transfers better than a large one, and
-every part can be inspected.
+The pipeline:
 
-## 2. Assets used and dropped
+1. Read the tactical ATD (our reader matches the upstream baseline's on all 199,319 frames).
+2. Find each kickoff from the tracking. Graded frames before it are dead ball; ungraded frames
+   are `X`.
+3. Compute 59 features per frame. All are collective (no player identities, since the 46 slots
+   are tracklets, not people): player speeds relative to the rest of the half, where the ball is
+   and how fast it moves, which team is closest to it, team shape, and which team was on the ball
+   in the seconds before and after. A small LightGBM model turns them into p(H, A, D).
+4. Nudge the team call with the Smart Tagging: inside a tagged possession phase for one team, the
+   other team gets a small penalty on every frame.
+5. Decode each half with Viterbi over {H, A, D}. Switching team costs `c_switch`, the ball going
+   dead costs `c_die`, a restart costs `c_restart`. A change only happens when the evidence over
+   its frames pays for it. That is basically our version of "controlled possession": one touch
+   or a header in a duel doesn't move possession, a sustained change does.
+6. Write the CSV with LF endings. Same bytes every run.
 
-| asset | used? | why |
+Why not a big sequence model? We have no labels for this match and aren't allowed to make any, so
+everything is learned on other games. The real risk is the gap between those games and this one,
+not lack of model capacity. Small model, sturdy features, and the time structure written into the
+decoder where we can see it.
+
+## 2. What we used from the data bundle
+
+| asset | used? | notes |
 |---|---|---|
-| Tactical ATD (players + ball) | **yes** | the main input: every alive/dead decision and almost every team call comes from it |
-| Tactical ATD metadata XML | **yes** | team of each slot; home = first `<Team>` |
-| Published half blocks and kickoff anchors (`games.py`) | **checks only** | blocks decide X vs graded; anchors only *assert* that the detected kickoff is consistent (within 2 s), never set a label |
-| Smart Tagging | **yes, as a weak team prior** | the phases of settled possession (Build Up, Progression, Creating Chances, Attacking Transition) lower the other team's score inside them. The weight was set on other games, with SkillCorner's automatic phases of play standing in for the tagging (sections 5 and 6). Set pieces are not an input: a label-free check showed our dead-ball runs already precede 55 of the 57 tagged ones. The ball-location codes, Long Ball and the `N/A` team are not used |
-| Homography | **no** | the ATD is already in pitch coordinates; the homography only maps to pixels, which we do not use |
-| Video (tactical, broadcast) | **no** | not needed for a tracking-based method |
-| Broadcast ATD | **no** | not synchronised to the tactical timeline; the tactical ATD covers the whole match |
+| Tactical ATD (players + ball) | yes | main input, almost every label comes from it |
+| ATD metadata XML | yes | which team each slot belongs to; first `<Team>` is home |
+| Half blocks and kickoff anchors (`games.py`) | as checks | blocks decide X vs graded. Anchors only confirm our detected kickoff is within 2 s |
+| Smart Tagging | yes, lightly | possession phases (Build Up, Progression, Creating Chances, Attacking Transition) give a small team prior. Set pieces, location codes, Long Ball and `N/A` teams aren't used |
+| Homography | no | pitch to pixels; we never touch pixels |
+| Video | no | |
+| Broadcast ATD | no | different timeline, and the tactical ATD already covers everything |
 
-Facts about the real tracking were measured with label-free aggregate tools (`tools/real_stats.py`,
-`tools/feature_stats.py`) and drove the design:
-- the ball is missing on 41% of graded frames, in about 150 long gaps (median ≈ 11 s);
-- 20.5 tracked players per frame on average, with fragmented tracklets over 46 slots;
-- the speed channel `s` is in m/s.
+A few facts about the real tracking that shaped things (measured with label-free tools,
+`tools/real_stats.py` and `tools/feature_stats.py`): the ball is missing on 41% of graded frames,
+mostly in long gaps (median around 11 s); about 20.5 players are tracked per frame, spread over 46
+fragmented slots; and the speed channel is in m/s, not km/h.
 
-## 3. Training data (all external; nothing from the provided game)
+## 3. Training data
 
-| source | licence / terms | labelled by | size | labels (`docs/label_derivation.md`) |
+Everything we trained or tuned on is from other matches.
+
+| source | licence | labelled by | size | how we got H/A/D |
 |---|---|---|---|---|
-| Metrica Sports open sample data, games 1–3 (github.com/metrica-sports/sample-data, pinned commit, SHA-256 checked) | no formal licence; the README asks for responsible use and acknowledgement. Acknowledged here | human event annotation by Metrica | 3 matches, about 430,000 frames at 25 fps | possession = team of each controlled action (pass, carry, shot, recovery, ball lost); challenges never change possession; dead from ball out / shot out or goal / foul / offside until the next restart (set piece or goal kick) |
-| SkillCorner open data, 10 A-League 2024/25 matches (github.com/SkillCorner/opendata, pinned, LFS objects SHA-256 checked) | MIT; the README asks to credit SkillCorner. Credited here | SkillCorner's automatic pipeline | 10 matches, about 1.5 M frames after 10 → 25 fps resampling | per-frame `possession.group`; a frame without possession *outside* every phase of play is dead ball; *inside* a phase it is a loose ball and stays with the last team (definition checked before use) |
+| Metrica open sample data, games 1–3 (github.com/metrica-sports/sample-data, pinned) | no formal licence, asks for acknowledgement (done here) | Metrica, human event data | 3 matches, ~430k frames at 25 fps | team of each controlled action; challenges don't change possession; dead from out / goal / foul / offside until the restart |
+| SkillCorner open data, 10 A-League 2024/25 matches (github.com/SkillCorner/opendata, pinned) | MIT, asks for credit (done here) | SkillCorner's automatic pipeline | 10 matches, ~1.5M frames after 10→25 fps | their per-frame `possession.group`; no possession outside any phase of play = dead; inside a phase = loose ball, stays with the last team |
 
-Both sources are converted into **our exact ATD text and XML format** at 25 fps, laid out like the
-real file, with untracked padding and a half-time gap. The same pipeline therefore runs end to end
-on them. No hand labels were made on any game; **no data, label or annotation of the provided game
-was used to train, tune or select anything.** The provided match's own Smart Tagging is an input
-at inference only (section 4); its weight was set on the SkillCorner games, whose phases of play
-(`<id>_phases_of_play.csv`, same source and licence) were written out as a tagging file in the
-real layout (`ext/tags.py`).
+Details in `docs/label_derivation.md`. Both sources get converted into exactly the same ATD text +
+XML format as the real file, so the whole pipeline runs on them unchanged. Nobody hand-labelled
+anything, and nothing from the provided match (data, labels, tags) went into training or tuning.
+The match's own Smart Tagging is only read at inference time; its weight was set on the
+SkillCorner games (section 5).
 
-**Noise model** (`ext/augment.py`). The external tracking is corrupted to match the real match's
-label-free aggregates:
-- **ball:** long dropouts (frequency, length histogram and crowding dependence as measured);
-- **players:** loss of view (so some frames have few players), individual player gaps;
-- **slots:** tracklet fragmentation onto 46 slots, so a slot is not a person; duplicate tracks.
+**Noise.** Clean external tracking looks nothing like the real ATD, so we corrupt it
+(`ext/augment.py`) to match the real match's label-free numbers: long ball dropouts, players
+dropping out of view, tracklets chopped and shuffled across 46 slots, duplicate tracks.
 
-Calibration (real vs Metrica):
-
-| | real | Metrica, corrupted |
+| | real | Metrica after noise |
 |---|---|---|
 | ball missing | 0.41 | 0.39–0.48 |
 | tracked players (mean) | 20.5 | 20.7–20.9 |
 | tracklets per minute | 11.5 | 11.4–12.6 |
-| player step p50 (m per frame) | 0.054 | 0.054–0.060 |
+| player step, median (m/frame) | 0.054 | 0.054–0.060 |
 
-**When the ball goes missing: an assumption we corrected.** Metrica blanks the ball whenever it is
-dead, so "no ball" would look like a perfect dead-ball cue that exists only in that source. For
-models v2 and v3 (noise condition `full`) we assumed that the real ball goes missing mostly in
-live play, restored a resting ball on most dead stretches, and dropped the ball independently of
-the state of play. A later label-free measurement of the whole match
-(`tools/slow_play_stats.py`) showed the opposite. Ranking graded frames by mean player speed:
+**One assumption we got wrong.** Metrica blanks the ball whenever it's dead, which would make "no
+ball" a perfect (and fake) dead-ball signal. For v2 and v3 we assumed the real ball mostly goes
+missing during live play, so we dropped it at random. Later we measured the whole real match
+(`tools/slow_play_stats.py`, player speed and ball visibility only, no labels) and it's the
+other way round:
 
 | ball tracked on | slowest 10% of frames | 10–25% | 25–50% | fastest 50% |
 |---|---|---|---|---|
 | real match | 8.6% | 29.8% | 50.7% | 82.7% |
-| external games under `full` (v2, v3) | about 69% | 66% | 60% | 58% |
-| external games under `full2` (v4) | 11–24% | 29–31% | 46–51% | 73–82% |
+| external, old noise (v2, v3) | ~69% | 66% | 60% | 58% |
+| external, new noise (v4, v5) | 11–24% | 29–31% | 46–51% | 73–82% |
 
-The real tracker loses the ball mostly while play is slow, which is when the ball is dead. Noise
-condition `full2` reproduces this: ball gaps start with a probability calibrated per player-speed
-bin, and a dead ball is restored only a quarter of the time, carried by the player taking the
-restart. Model v4 is the v3 feature set retrained on `full2`. The measurement uses player speed
-and ball visibility only: no label, ground truth or public-window score.
+So the real tracker loses the ball mostly when play is slow, i.e. stoppages. The new noise
+(`full2`) copies that, and v4 is the same features retrained on it.
 
-## 4. Possession rules implemented
+## 4. Possession rules
 
-- **Alive vs dead.** Dead ball is detected from the play itself: players slowing down, relative to
-  their own speed distribution in that half (so it does not depend on a source's speed scale); the
-  ball outside the pitch; the ball at rest. A dead run ends at the restart.
-- **Restarts and restart team.** Whoever the evidence favours when play resumes, typically the
-  team nearest the ball as it starts to move. There is no special case for throw-ins tagged `N/A`;
-  none is needed because set-piece tags are not an input.
-- **Smart Tagging team prior.** On frames inside a Build Up, Progression, Creating Chances or
-  Attacking Transition phase of one team, the other team's log-score is lowered by 0.2 per frame
-  before decoding. Frames where phases of both teams overlap are skipped, as are `N/A` teams. The
-  prior is weak on purpose: a phase can span two possessions, so it only tips frames on which
-  the tracking evidence is close. The dead-ball score is never changed, because the phases run
-  through stoppages (we call 20% of their frames dead).
-- **Loose and contested balls** stay with the last team. Contested phases carry weak, mixed
-  evidence, which never repays `c_switch`.
-- **Touches and deflections without control** do not change possession: a few frames of opposing
-  evidence cost more than they earn.
-- **Kickoffs.** Frames inside a graded half before its kickoff are `D`. The kickoff is found
-  algorithmically: the end of the first kickoff line-up (each team in its own half, at least 2 s,
-  tolerant of tracking dropouts), sharpened by the ball leaving the centre spot. It is asserted
-  against the published half blocks and kickoff anchors. On BAR-ATH: half 1 at +0.08 s from its
-  block start, half 2 at +117.04 s, 0.04 s and 0.28 s from the anchors.
-- **Abstention.** `X` only on ungraded frames; never on graded ones.
+- **Alive vs dead** comes from the play: players slowing down (relative to their own speeds in
+  that half, so it works across data sources), ball out of the pitch, ball at rest. A dead
+  stretch ends at the restart.
+- **Restart team**: whoever the evidence points to when play starts again, usually the team
+  nearest the ball. No special case for throw-ins tagged `N/A`.
+- **Smart Tagging prior**: inside a possession phase of one team, the other team's log-score
+  drops by 0.2 per frame. Overlapping phases of both teams are skipped. It's deliberately weak,
+  since a phase can cover two possessions; it only tips frames where the tracking is unsure. It
+  never touches the dead-ball score (phases run straight through stoppages).
+- **Loose and contested balls** stay with the last team. Mixed evidence in a duel never pays for a
+  switch.
+- **Touches and deflections** without control don't change possession, for the same reason.
+- **Kickoffs**: found as the end of the kickoff line-up (both teams in their own half for at least
+  2 s), sharpened by the ball leaving the centre spot, then checked against the published anchors.
+  Half 1: +0.08 s after its block start. Half 2: +117.04 s. Within 0.04 s and 0.28 s of the
+  anchors.
+- **X** only on ungraded frames. Never on graded ones.
 
-## 5. Validation protocol
+## 5. How we validated
 
-- **Leave-one-game-out** on the 13 external games. Each game is scored by a model trained on the
-  other 12. Its corrupted copy uses a different noise seed from any training copy.
-- **Metric:** the official `possession_metrics.evaluate`, imported from the upstream submodule and
-  never reimplemented.
-- **Tuning** (Optuna, seeded TPE, 60 trials) of the decoder costs, emission temperature, dead-ball
-  bias and boundary refinement, on the out-of-fold predictions only. The frozen parameters are the
-  median of the top 10 trials (`config/final_v4.yaml`). The honest estimate is a **nested 2-fold**
-  (tune on half the games, score the other half, swap).
-- **Four versions were frozen.** v2 (39 features) came first. An error analysis of v2 on the
-  external out-of-fold predictions then showed that the loss was in changes of possession, which
-  led to the touch-sequence features of v3. v4 keeps v3's features and changes only the training
-  noise (section 3). v5 is v4 plus the Smart Tagging team prior. Each step was accepted on the
-  external games alone, by a rule fixed beforehand. v2, v3 and v4 stay reproducible with
-  `--method v2`, `--method v3` and `--method v4`.
-- **Validating the tagging prior without a second tagged game.** Smart Tagging exists only for
-  the provided match. SkillCorner's automatic phases of play (build-up, create, finish,
-  transition, each with a team) are the same kind of stream, so they stand in for it on the 10
-  SkillCorner games. They share a possession model with our SkillCorner labels, which makes them
-  cleaner than an independent tagger, so they are degraded first: boundaries moved by about 1 s,
-  22% of phases dropped, and up to 30% of phases given to the wrong team. The weight follows a
-  rule fixed before the real run: no mean loss in any of those scenarios, then the best worst
-  case over the plausible ones (`ext.tags.choose_weight`). The stand-in is only used for the team
-  call: our SkillCorner dead-ball labels were derived from the same phases, so a test of alive
-  against dead would be circular, and the prior leaves that decision alone.
-- **A structural check on the decoder settings**, added with v4. The first v4 search returned
-  settings in which a direct change of team cost more than the ball dying and restarting. Such a
-  decoder never switches team directly; it inserts a sub-second dead ball at every change (106
-  dead runs under 1 s per external game against 3 in the truth). spellF1 cannot see this, so the
-  search could not either. Settings of that kind are now excluded from the search
-  (`tune.no_bridge`), and `tools/report.py` raises an alarm if more than 10% of dead-ball runs
-  are under 1 s. The frozen v2 and v3 settings already satisfied the rule.
-- **The provided match was never used to choose anything.** Only label-free aggregates of its
-  tracking were used to calibrate the noise model, plus sanity alarms on our output (possessions
-  per half, durations, dead-ball share, Barcelona's share), fixed in advance and never tuned on.
-- **Public 5-minute window:** used as a correctness check and, as CHALLENGE.md invites, to
-  understand what is expected. It was looked at **seven times**: twice on the frozen v2 file
-  (the scoreboard, then its frame-level breakdown), once on the frozen v3 file, once per segment
-  on the v3 file, once on the v4 file (scoreboard and per segment), once by hand on one stoppage
-  of the v5 file, and once on the submitted v5 file as a final check. Each scored file had been
-  chosen on the external games, frozen, reproduced and, for v4 and v5, packaged for upload
-  before its look, and no look changed which file was submitted. One earlier run scored only the
-  upstream baselines, to test the tool. See `docs/public_window_log.md`.
-- **What the window did and did not influence.** No parameter, threshold or model choice was ever
-  fitted to it or selected with it: v3 was chosen over v2, and v4 over v3, on the external games
-  alone. The fourth look did prompt a question. Most of our dead-ball misses in the window came
-  from one stoppage, which made us doubt our assumption about when the real ball goes untracked.
-  We then answered that question without the window and without labels, by measuring ball
-  visibility against player speed over the whole match (section 3). That measurement, not the
-  window, defines the corrected noise model, and the external games decided whether to adopt it.
-  The fifth look reported that 7.6% of the window's frames carried the wrong team. The decision
-  to add the tagging prior did not rest on that number: it followed from a label-free comparison
-  of our labels with the tags over the whole match, and from the SkillCorner test.
+- Leave-one-game-out over the 13 external games: each game is scored by a model trained on the
+  other 12, on a noise copy it never saw.
+- Scoring always uses the official `possession_metrics.evaluate` from the upstream submodule. We
+  never reimplemented it.
+- Decoder costs, temperature and dead-ball bias were tuned with Optuna (seeded TPE, 60 trials) on
+  the out-of-fold predictions, and we froze the median of the top 10 trials. The number we trust
+  is a nested 2-fold estimate (tune on half the games, score the other half, swap).
+- Every new version had to win clearly on most external games, by a rule we fixed before looking.
+  v2 → v3 added touch-sequence features (the error analysis said we were losing at changes of
+  possession). v3 → v4 only changed the training noise. v4 → v5 added the tagging prior. Older
+  versions still rebuild with `--method v2/v3/v4`.
+- **Testing the tagging prior with no second tagged game.** Only this match has Smart Tagging.
+  SkillCorner's phases of play are the same kind of thing (build-up, create, finish, transition,
+  each with a team), so they stood in for it. They're cleaner than a real independent tagger, so
+  we made them worse first: boundaries shifted ~1 s, 22% of phases dropped, up to 30% given to
+  the wrong team. We picked the biggest weight that never lost on average in any of those
+  scenarios. We only used this for the team call; for alive/dead it would be circular, because
+  our SkillCorner dead-ball labels come from the same phases.
+- **A trap we caught.** The first v4 search found settings where a direct team switch cost more
+  than dying + restarting. The decoder then never switched directly and slipped a tiny dead ball
+  into every change (106 sub-second dead runs per game vs 3 in the truth). spellF1 can't see
+  this, so the search couldn't either. Those settings are now excluded (`tune.no_bridge`), and
+  `tools/report.py` flags it if more than 10% of dead runs are under 1 s.
+- **The real match never picked anything.** We only used label-free aggregates of its tracking
+  (to calibrate the noise) and sanity alarms on our output, with ranges fixed in advance.
+- **Public 5-minute window.** We looked at it seven times, all logged in
+  `docs/public_window_log.md`: twice for v2, twice for v3 (scoreboard, then per segment), once
+  for v4, once by hand on one stoppage in v5, and once on the final v5 file. Each file was frozen
+  before its look and no look changed what we submitted. One honest caveat: the fourth look made
+  us suspicious about when the real ball goes missing. We answered that with the whole-match
+  measurement in section 3, not with the window, and the external games decided whether to adopt
+  it.
 
 ## 6. Results
 
-External games, official spellF1, mean over 13 games. Learned variants are leave-one-game-out.
-First, on the corrected noise `full2`, the comparison that decided v4:
+All external numbers are mean spellF1 over the 13 games, leave-one-game-out.
 
-| method, scored on `full2` | all 13 (nested estimate) | Metrica (3) | SkillCorner (10) |
+On the corrected noise, which is what decided v4:
+
+| | all 13 (nested) | Metrica (3) | SkillCorner (10) |
 |---|---|---|---|
-| **v4: v3's features, trained on `full2`** | **0.439** | 0.604 | 0.389 |
-| v3's recipe, trained on `full` | 0.419 | 0.556 | 0.378 |
-| v4 + 9 ball-gap and slow-down features | 0.437 | 0.606 | 0.386 |
+| **v4** (v3 features, new noise) | **0.439** | 0.604 | 0.389 |
+| v3 recipe (old noise) | 0.419 | 0.556 | 0.378 |
+| v4 + 9 extra ball-gap / slowdown features | 0.437 | 0.606 | 0.386 |
 
-v4 is better than v3's recipe on 10 of 13 games (mean +0.020, paired t = 3.1; the three losses
-are under 0.01). The extra features, which encode a ball gap and a sudden drop in player speed
-directly, add nothing once the training data has the right ball visibility (better on 6 of 13),
-so they are not shipped.
+v4 beats v3's recipe on 10 of 13 games (+0.020, paired t = 3.1). The extra features didn't add
+anything once the noise was right, so we left them out.
 
-**The Smart Tagging team prior (v5)**, on the 10 SkillCorner games with their phases of play as
-the stand-in stream, v4's settings unchanged (0.388 without tags):
+Tagging prior (v5), on the 10 SkillCorner games, v4 settings unchanged, 0.388 without tags:
 
-| quality of the stand-in tags | they name the true team on | we agree with them on | spellF1 gain at the frozen weight 0.2 | at 0.4 | at 0.8 |
-|---|---|---|---|---|---|
-| as delivered | 87.1% | 91.9% | **+0.009** (10 of 10 games) | +0.014 | +0.020 |
-| boundaries moved by 1 s, 22% of phases dropped | 87.0% | 91.7% | **+0.007** (8 of 10) | +0.010 | +0.013 |
-| and 10% of phases given to the wrong team | 80.4% | 84.4% | **+0.003** (6 of 10) | +0.003 | +0.001 |
-| and 20% | 72.1% | 75.4% | **+0.005** (8 of 10) | −0.001 | −0.011 |
-| and 30% | 64.0% | 65.5% | **+0.001** (6 of 10) | −0.001 | −0.010 |
+| stand-in tag quality | tags name the true team | gain at our weight 0.2 | at 0.4 | at 0.8 |
+|---|---|---|---|---|
+| as delivered | 87.1% | +0.009 (10/10 games) | +0.014 | +0.020 |
+| shifted 1 s, 22% dropped | 87.0% | +0.007 (8/10) | +0.010 | +0.013 |
+| + 10% wrong team | 80.4% | +0.003 (6/10) | +0.003 | +0.001 |
+| + 20% wrong team | 72.1% | +0.005 (8/10) | −0.001 | −0.011 |
+| + 30% wrong team | 64.0% | +0.001 (6/10) | −0.001 | −0.010 |
 
-The weight 0.2 is the largest that never loses on average, whatever the tag quality. On the real
-match the tagging evidence covers 54.5% of the frames we call alive and we agree with it on 88.3%
-of those (label-free, `tools/tagging_stats.py`), which places the real stream between the second
-and third rows. The gain is real but small, and the prior does not recover missed possessions:
-the predicted possession count does not rise. The stand-in also differs from the real stream
-(its phases are about half as long), so these numbers are a guide, not a forecast.
+Bigger weights win more when the tags are good and lose when they're bad; 0.2 never lost. On the
+real match the tags cover 54.5% of the frames we call alive and agree with us on 88.3% of them,
+which puts the real stream somewhere around the second or third row. So: a small gain, and it
+doesn't find the possessions we miss.
 
-Then the earlier results, on the older noise `full`:
+Older results, on the old noise:
 
-| method, scored on `full` | all 13 | Metrica (3) | SkillCorner (10) |
+| | all 13 | Metrica | SkillCorner |
 |---|---|---|---|
-| v3 = v2 + touch-sequence features, tuned decoder (nested estimate) | 0.417 | 0.52–0.56 per game | 0.34–0.44 per game |
-| v3 + change-point model driving the decoder's costs (three searches) | 0.413–0.429 | | |
-| v2 (39 features), tuned decoder (nested estimate) | 0.393 | 0.45–0.49 per game | 0.33–0.43 per game |
-| v2, M4 decoder settings | 0.395 | 0.473 | 0.371 |
-| v2 with boundary refinement | 0.388 | 0.469 | 0.364 |
-| v2 without team-shape features | 0.368 | 0.447 | 0.344 |
-| v2 with absolute instead of relative speed | 0.389 | 0.474 | 0.364 |
-| hand-written rules + the same decoder | 0.301 | 0.381 | 0.277 |
-| upstream baseline, ported (nearest player, ±2 s vote) | 0.189 | 0.229 | 0.176 |
+| v3 (nested) | 0.417 | 0.52–0.56 | 0.34–0.44 |
+| v3 + change-point model (three searches) | 0.413–0.429 | | |
+| v2 (nested) | 0.393 | 0.45–0.49 | 0.33–0.43 |
+| v2 without team shape | 0.368 | 0.447 | 0.344 |
+| hand-written rules + same decoder | 0.301 | 0.381 | 0.277 |
+| upstream baseline, ported | 0.189 | 0.229 | 0.176 |
 
-The learned model beats the rules on all 13 games. Team-shape features carry the team call while
-the ball is unknown. The touch-sequence features of v3 improve on v2 on 11 of 13 games at equal
-decoder settings. A change-point model that drives the decoder's transition costs was also tried;
-its gain was not stable across searches, so it is not shipped (`docs/ablation.md`).
-Under the realistic noise, the ported baseline scores 0.18–0.23, close to
-its published full-match score on the real game (0.243). The noise model was never tuned to that
-number, so the closeness is independent evidence that the noise model is realistic.
+The change-point model wasn't stable across searches, so it's out. Side note: under our noise the
+ported baseline scores 0.18–0.23, close to its published 0.243 on the real game. We never tuned
+for that, so it's a decent sign the noise is realistic.
 
-**Real match: sanity alarms only** (no labels; ranges fixed before the check). Submitted file,
-v5, with the earlier v4 and v3 files for comparison (half 1 / half 2):
+**Real match, sanity alarms only** (no labels, ranges set before we looked), half 1 / half 2:
 
-| alarm | v5 (submitted) | v4 | v3 | range | |
-|---|---|---|---|---|---|
-| possessions | 134 / 123 | 134 / 127 | 153 / 144 | 100–200 | pass |
-| mean possession | 14.0 s / 13.9 s | 14.1 s / 13.5 s | 13.2 s / 13.4 s | 5–25 s | pass |
-| dead-ball share | 41.1% / 46.0% | 40.8% / 45.9% | 36.4% / 39.4% | 25–50% | pass |
-| Barcelona share of ball-in-play | 62.4% / 59.7% | 62.5% / 59.0% | 61.3% / 58.8% | 45–75% | pass |
-| possessions under 0.5 s; X on graded frames | 0; 0 | 0; 0 | 0; 0 | ≤5%; 0 | pass |
-| dead-ball runs under 1 s (alarm added with v4) | 1 of 57 / 0 of 60 | 1 of 55 / 0 of 60 | | ≤10% | pass |
+| | v5 (submitted) | v4 | v3 | range |
+|---|---|---|---|---|
+| possessions | 134 / 123 | 134 / 127 | 153 / 144 | 100–200 |
+| mean possession | 14.0 / 13.9 s | 14.1 / 13.5 s | 13.2 / 13.4 s | 5–25 s |
+| dead-ball share | 41.1 / 46.0% | 40.8 / 45.9% | 36.4 / 39.4% | 25–50% |
+| Barcelona share of ball in play | 62.4 / 59.7% | 62.5 / 59.0% | 61.3 / 58.8% | 45–75% |
+| possessions < 0.5 s, X on graded | 0, 0 | 0, 0 | 0, 0 | ≤5%, 0 |
+| dead runs < 1 s | 1 of 57 / 0 of 60 | 1 of 55 / 0 of 60 | | ≤10% |
 
-**v5 against v4 on the real match, without ground truth:** the same label on 99.1% of the 158,857
-graded frames, the same alive/dead call on 99.8%, the same team on 98.8% of the frames both call
-alive, `X` on the same frames, 257 possessions against 261. The prior moves 1,113 frames from
-one team to the other and 349 frames from alive to dead; 5 go the other way. A small, targeted
-change, as intended for a weak prior.
+All pass. v5 vs v4 on the real match: same label on 99.1% of graded frames, same alive/dead on
+99.8%. v4 vs v3: same label on 92.1%, and nearly all the difference is extra dead ball in v4
+(9,219 frames), which is what the noise fix was supposed to do.
 
-**v4 against v3 on the real match, without ground truth** (`tools/compare_submissions.py`): the two
-files give the same label on 92.1% of the 158,857 graded frames, the same alive/dead call on 93.8%,
-and the same team on 97.0% of the frames both call alive. `X` sits on exactly the same frames and
-both kickoffs are detected at the same frames. The difference is almost entirely dead ball: v4
-calls 9,219 frames dead that v3 called alive, and only 584 the other way. That is the intended
-effect of the corrected noise model: stoppages in which the ball is untracked or carried are now
-recognised. With more dead ball, v4 reports 261 possessions against v3's 297. (v3 against v2
-agreed on 91.8% of graded frames.)
+**Smart Tagging as a cross-check.** Every tagged set piece is a restart, so there should be a dead
+ball just before it. Our file has one before 55 of the 57 tagged set pieces (the two misses are
+throw-ins). The tags only cover about half our stoppages, since offsides and most fouls aren't
+tagged. Two automatic systems that share no code agreeing that well was enough for us to leave
+set pieces out of the model.
 
-**Smart Tagging set pieces as an independent check of the dead ball** (`tools/tagging_stats.py`,
-run on the tag-free v4 file; no ground truth). Every tagged set piece is a restart, so a dead
-ball must precede it. Of the 57 tagged set pieces on graded frames (throw-ins, corners, goal
-kicks, free kicks, kickoffs after a goal), the file has a dead ball before 55, and its own
-restart falls inside the tagged interval for 51. The two without a dead ball are throw-ins. The
-tags cover about half of our stoppages (58 of 112 dead-ball runs end at a tagged set piece);
-offsides and most fouls are not tagged. Two automatic sources that share no code agree this
-closely on alive against dead, so the set-piece tags were not made an input: forcing the last two
-would move a handful of frames. Inside the tagged possession phases the same check showed less
-agreement on the team (Build Up 92%, Progression 90%, Creating Chances 85%, Attacking Transition
-68% of the frames we call alive), which is where the v5 prior acts.
+**Public window** (correctness check only, each file already frozen):
 
-**Public window (correctness check, each file checked after it was frozen):**
-
-| on the public 5 minutes (7,500 frames, 17 possessions) | macroF1 | spellF1 | frame accuracy | alive/dead F1 | team accuracy (both alive) | possessions |
+| 7,500 frames, 17 possessions | macroF1 | spellF1 | frame acc. | alive/dead F1 | team acc. | possessions |
 |---|---|---|---|---|---|---|
-| **submitted file, v5** | **0.793** | **0.588** | 0.823 | 0.945 | 0.897 | 17 of mean 15.8 s |
-| earlier file, v4 | 0.798 | 0.587 | 0.830 | 0.945 | 0.905 | 13 of mean 20.7 s |
-| earlier file, v3 | 0.793 | 0.563 | 0.826 | 0.942 | 0.905 | 15 of mean 17.8 s |
-| earlier file, v2 | 0.783 | 0.513 | 0.814 | 0.941 | 0.892 | 15 of mean 17.8 s |
-| ground truth | | | | | | 17 of mean 14.2 s |
-| best upstream baseline on this window | 0.621 | 0.424 | | | | |
+| **v5 (submitted)** | **0.793** | **0.588** | 0.823 | 0.945 | 0.897 | 17, mean 15.8 s |
+| v4 | 0.798 | 0.587 | 0.830 | 0.945 | 0.905 | 13, mean 20.7 s |
+| v3 | 0.793 | 0.563 | 0.826 | 0.942 | 0.905 | 15, mean 17.8 s |
+| v2 | 0.783 | 0.513 | 0.814 | 0.941 | 0.892 | 15, mean 17.8 s |
+| ground truth | | | | | | 17, mean 14.2 s |
+| best upstream baseline | 0.621 | 0.424 | | | | |
 
-The check shows that frames are aligned, the file is well-formed and the labels mean what we
-intend. With only 17 possessions it cannot rank or tune anything: one possession more or less
-moves spellF1 by about 0.06, more than the difference between any two of our rows. No setting was
-changed after any look, and each version had been chosen on the external games and frozen before
-its check. The v5 and v4 rows show exactly that: v5 is a hair higher on spellF1 and a hair lower
-on frame accuracy and team accuracy, and neither difference means anything on 17 possessions.
-v5 was kept because it had been chosen beforehand, not because of this row. Its dead-ball calls
-in the window are identical to v4's (recall 0.52, precision 1.00); the tagging prior changes
-team calls only. It reports 17 possessions, the true count, of which 11 match at IoU 0.5.
+It tells us the frames line up and the labels mean what we think. It can't rank anything: with 17
+possessions, one more or less moves spellF1 by ~0.06. v5 and v4 are level here; we kept v5
+because it was picked on the external games beforehand.
 
-What the v4 file gets wrong on this window, by frames (the per-segment study was not repeated
-for v5): 83.0% correct, 9.3% dead ball called
-alive, 7.6% wrong team, and 3 frames alive called dead.
-- **Short possessions.** 10 of the 17 possessions are matched. Five of the seven missed ones last
-  under 4 s (0.8 s to 3.6 s). This is the under-segmentation measured on external games
-  (section 7).
-- **Dead ball** is the weakest class for both v3 and v4 (recall 0.53 and 0.52; precision 1.00).
-  Of the four stoppages, two are found (83% and 92% of their frames). A 5 s one is played
-  through. In a 20 s one the ball is tracked and moving throughout, among slow players, and we
-  keep a team in possession for most of it. The extra dead ball that v4 finds on the whole match
-  (comparison with v3 above) lies outside this window.
-- **Boundary timing.** Only 5 of the 20 changes of state are placed within 1 s.
+What goes wrong in the window (per-segment study of v4; v5 has the same dead-ball calls): 83% of
+frames right, 9.3% dead ball called alive, 7.6% wrong team. Five of the seven missed possessions
+are under 4 s. Dead ball is the weak class (recall 0.52, precision 1.00): one 5 s stoppage is
+played through, and in a 20 s one the ball stays tracked and moving among slow players, so we
+keep giving it to a team. Only 5 of the 20 changes land within 1 s.
 
-## 7. Limitations and next steps
+## 7. Limitations
 
-- **Under-segmentation.** On external games the model reports 0.6–0.7× the true number of
-  possessions. It misses quick turnovers: possessions under 3 s are a third of the true ones and
-  are rarely matched. Tuning the decoder cannot fix this: cheaper switches add false switches
-  faster than they recover real ones. The touch-sequence features of v3 place boundaries better
-  but do not recover most short possessions. About 40% of frames have no ball, and a change of
-  control inside such a gap cannot be located from the tracking.
-- **Proxy labels.** External labels approximate, not reproduce, the competition's definition (which
-  comes from corrected tracking). SkillCorner's labels are automatic and its tracking is broadcast
-  (extrapolated off camera). External scores are a relative guide, not a forecast.
-- **Smart Tagging is used cautiously.** The team prior was validated on another vendor's phases
-  of play, not on Metrica's own tags, so its weight is deliberately small. With Smart Tagging on
-  other games it could carry more weight and also inform restarts.
-- **Dead ball with a tracked, moving ball** (a ball carried or kicked back during a stoppage) is
-  the weakest dead-ball case. A detector of sudden collective slowdowns with a penalty-area
-  exclusion (`src/mtah/deadball.py`) was built and tested on the external games; it lowered
-  spellF1 (0.439 → 0.435 at its mildest setting) and is not shipped. Possession-balanced
-  training, aimed at the short possessions, did not help either. Details in `docs/ablation.md`.
-- **Kickoff timing** is a few frames off (half 2: about 7 frames early), and boundaries are not
-  refined for the learned model because snapping hurt it on external games.
-- **Noise model gaps.** It does not reproduce the real 2.4% of frames with 23 or more tracks, and
-  its tracklets are about twice as long as the real ones.
+- **Short possessions.** This is the big one. We predict 0.6–0.7× the true number of possessions
+  on external games. Possessions under 3 s are a third of all possessions and we find very few of
+  them; the per-frame model favours the right team on only 37% of frames in possessions under
+  1.5 s. If we could find every one of them, the external score would go from 0.439 to about
+  0.69. Perfect boundary timing, by contrast, would only add ~0.03. We tried three ways of
+  re-weighting training towards short possessions and none helped: the features just can't tell a
+  short controlled possession from a touch in a duel, and 40% of the time there's no ball.
+- **Stoppages with a visible, moving ball** (ball carried or kicked back to the restart spot).
+  We built a detector for sudden collective slowdowns, with a penalty-area exclusion
+  (`src/mtah/deadball.py`). On external games it lowered spellF1 (0.439 → 0.435 at its mildest
+  setting), so it's not in the submission. The code and its tests are kept.
+- **Proxy labels.** External labels approximate the competition's definition, they don't copy
+  it. SkillCorner's labels are automatic and its tracking is broadcast. Treat external scores as a
+  relative guide.
+- **Tagging prior is small on purpose.** It was validated on another vendor's phases, not
+  Metrica's.
+- **Kickoff timing** is a few frames off (half 2 ~7 frames early). We don't snap boundaries for
+  the learned model; it made things worse externally.
+- **Noise gaps.** We don't reproduce the 2.4% of real frames with 23+ tracks, and our tracklets
+  are about twice as long as the real ones.
+
+More detail on all the experiments, including the ones that failed, is in `docs/ablation.md`.
 
 ## 8. Reproduction
 
-Windows Command Prompt, Python 3.11, with the official data bundle unpacked anywhere:
+Windows Command Prompt, Python 3.11, data bundle unpacked anywhere:
 
 ```
 git clone --recurse-submodules <repository URL> mtah-possession
@@ -349,24 +274,15 @@ py -3.11 -m venv .venv
 .venv\Scripts\python.exe tasks.py validate --expect-sha256 recorded
 ```
 
-The output is `outputs\real\submission.csv`, in about 20–50 s. `--expect-sha256 recorded` fails
-unless the file equals the frozen one (`config/submission.sha256`). Byte-exact reproduction from
-a fresh clone with a fresh virtual environment was verified for v2 on the real data, and for every
-version on a full-length synthetic match. The v3, v4 and v5 files were each regenerated
-byte-identically on the real data in a second run. The inputs are the bundle's tactical ATD
-text, its metadata XML and its Smart Tagging XML. Everything else that determines the bytes is
-pinned:
-- all dependencies (`requirements.txt`, full closure);
-- the upstream submodule commit;
-- the model file, stored byte-exact;
-- the frozen config;
-- single-threaded LightGBM inference.
+That writes `outputs\real\submission.csv` in 20–50 s. `--expect-sha256 recorded` fails unless the
+bytes match `config/submission.sha256`. Inputs are the tactical ATD text, its metadata XML and
+the Smart Tagging XML. Everything else is pinned: `requirements.txt` (full closure), the upstream
+submodule commit, the model file, the frozen configs, and single-threaded LightGBM at inference.
+We regenerated v3, v4 and v5 a second time on the real data and got identical bytes, and every
+version reproduces on a full-length synthetic match. Older files: `--method v4 --expect-sha256
+recorded-v4` (same for v3, v2; add `--out` so they don't overwrite each other).
 
-The earlier frozen versions are reproduced with `tasks.py submission --method v4 --expect-sha256
-recorded-v4`, and likewise `v3` / `recorded-v3` and `v2` / `recorded-v2` (add `--out` to keep the
-files apart).
-
-Rebuilding the model from external data only (each step is deterministic):
+Rebuilding the model from external data:
 
 ```
 .venv\Scripts\python.exe tasks.py external --prepare
@@ -379,14 +295,10 @@ Rebuilding the model from external data only (each step is deterministic):
 .venv\Scripts\python.exe -m ext.tags freeze
 ```
 
-The last three write the stand-in tagging files, run the tagging test and freeze the weight in
-`config/final_v5.yaml`.
-(v3: `cache`, `logo --variant touch`, `final-v3 --variant touch`, `tune --variant touch --freeze`.)
+The last three redo the tagging test and freeze its weight in `config/final_v5.yaml`.
+`python tasks.py test` runs the tests (83) on synthetic matches in the exact ATD format.
 
-`python tasks.py test` runs the unit and end-to-end tests (83) on synthetic matches in the exact
-ATD format.
-
-**Development note.** The code was written with an AI coding assistant. In line with the terms,
-the assistant never had access to the match data, video or any extract of them. A team member ran
-every command on the real data locally and shared only aggregate numbers (counts, shares,
-percentiles), as recorded in this document.
+**How this was built.** We wrote the code with an AI coding assistant. As the terms require, the
+assistant never saw the match data, the video or any extract of them. One of us ran everything on
+the real data locally and only shared aggregate numbers (counts, shares, percentiles) back, which
+are the numbers quoted here.

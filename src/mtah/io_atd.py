@@ -1,24 +1,12 @@
-"""Fast parser for the raw ATD (Metrica FIFA/EPTS) tracking file and its metadata XML.
+"""Fast reader for the raw ATD file + its metadata XML.
 
-Raw line:  ``<frame_id>:<x,y,s>;<x,y,s>;...;<x,y,s>:<x,y,s>`` (players, then the ball), with
-``NaN`` for a missing observation. x and y are normalised to 0-1; s is speed in **m/s**.
+Line format: <frame_id>:<x,y,s>;...;<x,y,s>:<x,y,s>  (players, then ball). NaN = missing.
+x, y in 0-1, s in m/s. video_frame = frame_id - 1.
 
-Speed unit: upstream DATA.md says m/s, and the real match agrees: the speed computed from player
-positions is the raw ``s`` value at every percentile (checked with tools/real_stats.py). The real
-ball's ``s`` is implausibly slow and mostly missing where it matters, so features compute ball speed
-from positions instead.
-``video_frame = frame_id - 1``.
+Trick: swap ':' and ';' for ',' and let pandas' C reader do the rest. round_trip keeps values
+bit-identical to float(), so we match the upstream baseline exactly.
 
-Speed: replacing ``:`` and ``;`` with ``,`` turns every line into ``1 + 3*n_slots + 3`` plain
-numbers, which pandas' C reader parses in seconds. ``float_precision="round_trip"`` makes each
-value bit-identical to Python's ``float()``, which is what the upstream baseline uses, so distances
-computed here match it exactly (tests/test_parity.py).
-
-Privacy: this module runs on the real match only on the human's machine. Error messages report
-counts and line numbers, never values from the file.
-
-No kloppy here: it is far slower, and inference must stay fast. kloppy is used only in the tests,
-as an independent check that our synthetic files follow the real format.
+NB error messages give counts / line numbers only, never values from the file.
 """
 
 import io

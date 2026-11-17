@@ -1,15 +1,7 @@
-"""Smart Tagging (SportsCode XML) -> intervals in video frames.
+"""Smart Tagging XML -> intervals in video frames (frame = round(seconds * fps)).
 
-Metrica's automatic tactical tags: phases of play and set pieces, each an interval with a code and
-tags (Team, Half, Type, ...). `<start>` and `<end>` are seconds from the first video frame, so
-`round(seconds * fps)` is a video frame (upstream DATA.md, verified there on both kickoffs).
-
-Codes are upper case and tag values title case in the delivered file; everything here is matched
-case-insensitively. Team is `N/A` on some intervals (every throw-in) and is then treated as
-missing. The tags are noisy evidence, not truth, and their intervals are phases, not possessions.
-
-`team_evidence` turns the phases of settled possession into a per-frame team prior for the decoder
-(model v5, emission_v5.py); tools/tagging_stats.py uses the same reader for its consistency check.
+Codes/tags matched case-insensitively. Team "N/A" counts as no team. Phases aren't possessions,
+so treat this as noisy evidence.
 """
 
 import xml.etree.ElementTree as ET

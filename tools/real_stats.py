@@ -1,19 +1,9 @@
-"""Label-free aggregate statistics of a match's tracking, to calibrate the noise augmentation.
+"""Label-free aggregates of a match's tracking, used to calibrate the noise.
 
-Prints ONLY aggregates (shares, counts, histograms, percentiles) over graded frames. No per-frame
-value, no position, no frame number is ever printed, so the output is safe to paste into a chat.
-Every printed number goes through ``collect()``'s dict; nothing else writes to stdout.
+Only prints shares / counts / histograms / percentiles, never a frame or position, so the
+output is safe to share.
 
     .venv\\Scripts\\python.exe tools\\real_stats.py --data-dir C:\\Hackathon\\mtah-data
-
-What it measures (all on the published graded blocks, so no labels and no kickoff detection):
-  ball      missing share; histograms of missing-gap and visible-run lengths; how gap length and
-            the per-frame chance of losing the ball depend on crowding (players within 3 m of the
-            last seen ball) and on the ball's speed when it was lost; share outside the pitch
-  players   tracked per frame (overall and per team); distinct slots used per team; tracklet
-            (fragment) length histogram; a duplicate-track proxy (same-team pair within 0.5 m)
-  speeds    percentiles of the speed channel (m/s) for players and ball, and of the per-frame
-            displacement, which shows position jitter
 """
 
 import argparse

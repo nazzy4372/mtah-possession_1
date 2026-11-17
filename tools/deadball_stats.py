@@ -1,12 +1,5 @@
-"""Aggregates of the slowdown dead-ball detector (src/mtah/deadball.py) on a match. No labels.
-
-Prints, per half, how many dead-ball stretches the detector proposes, their median duration and
-their share of the graded frames; then how often each cue fired, how the start of each stretch
-was found and how many candidates were dropped by the penalty-area rule or for lack of a second
-cue. Counts, shares and medians only: no frame number, no position. Safe to share.
-
-The detector is evidence for the decoder, not a labeller, and it is not part of the submitted
-model; this tool only shows how it behaves on a match.
+"""Aggregates of the slowdown detector on a match: intervals per half, durations, cue counts.
+No labels, no frame numbers.
 
     .venv\\Scripts\\python.exe tools\\deadball_stats.py --data-dir C:\\Hackathon\\mtah-data
 """

@@ -1,14 +1,8 @@
-"""Score labelling methods on external games with the official metric.
+"""Score methods on the external games with the official metric.
 
-    python tasks.py external [--games 1 2 3] [--bootstrap 200]
+    python tasks.py external [--games ...]
 
-For each converted external game (ext_cache/bundles/<name>/) and each condition:
-  clean      the external tracking as converted;
-  balldrop   plus real-calibrated ball dropout (ext/augment.py, fixed seed per game);
-it runs every method (the ported upstream baseline and our v1), scores against the event-derived
-ground truth with upstream possession_metrics.evaluate (imported, never reimplemented) and prints
-spellF1 with a bootstrap interval, macroF1 and possession counts. Results go to
-outputs/external/results.json as well.
+Conditions: clean, balldrop, full (and full2 for the newer models).
 """
 
 import json

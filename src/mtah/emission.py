@@ -1,25 +1,10 @@
-"""Emission model v1: hand-written rules -> per-frame log p(H), log p(A), log p(D).
+"""Rules v1: hand-set log-scores for H, A and D.
 
-Factorised as  p(D) = sigmoid(z_dead)  and  p(H | alive) = sigmoid(z_team), so team evidence never
-argues about alive vs dead and vice versa.
-
-z_team (positive = home):
-  * proximity: who is nearest the (observed or interpolated) ball, weighted by how close the
-    nearest player is: margin d_away - d_home through tanh;
-  * last touch: the team that last had a player clearly on the ball, fading with time. It is used
-    when nobody is near the ball, which covers the long real-match ball gaps;
-  * shape: the team in possession pushes its centroid towards the goal it attacks (weak).
-
-z_dead:
-  * players slow: the median player speed below SPEED_PIVOT means a stoppage (strongest cue);
-  * ball outside the pitch;
-  * ball known and stationary.
-  Deliberately NOT used: "the ball is missing". In the Metrica open data the ball is blanked while
-  the ball is dead, but on the real match it goes missing mostly during live play. A rule built on
-  it would fit the external games and fail on the real one.
-
-Weights are hand-set from feature distributions on external games 1-2 (game 3 held out). They are
-tuned properly in M5.
+p(D) and p(H | alive) are separate, so team evidence never argues about alive/dead.
+team: who's nearest the ball, last touch (fading), a bit of team shape.
+dead: slow players, ball out of the pitch, ball at rest.
+We deliberately don't use "ball missing" here (Metrica blanks the dead ball, which would teach
+the wrong thing).
 """
 
 from dataclasses import dataclass

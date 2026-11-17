@@ -1,20 +1,12 @@
-"""Learned emissions (v2): LightGBM on noise-augmented external games, leave-one-game-out.
+"""Train the learned emission models on external games (leave-one-game-out).
 
-    python -m ext.train cache            # feature matrices for every external game (cached)
-    python -m ext.train logo [--variant all|noshape|rawspeed] [--grid]
-    python -m ext.train final            # train on every game, write models/emission_v2.txt
+    python -m ext.train cache [--condition full|full2]
+    python -m ext.train logo --variant touch_f2
+    python -m ext.train final-v4
 
-Protocol:
-  * training rows: each game under the FULL noise model with seed 2000 + i, every SUBSAMPLE-th
-    graded frame, plus a home/away-mirrored copy (labels swapped);
-  * evaluation: the held-out game under the full noise model with a different seed (1000 + i,
-    the same corrupted copy v1 and the baseline are scored on in ext/evaluate.py), every frame;
-  * the model outputs p(H, A, D | x). It is calibrated with one temperature fitted on the
-    out-of-fold predictions, divided by the class prior to give emission likelihoods, then
-    decoded with the same Viterbi and refinement as v1;
-  * LightGBM is deterministic (deterministic=True, force_row_wise=True, fixed seeds and thread
-    count); inference runs single-threaded.
-Nothing here touches the provided match.
+Training rows: every 5th graded frame of each game plus a home/away-mirrored copy. Each game is
+scored on a noise copy with a different seed. LightGBM is deterministic; inference single-threaded.
+Nothing here reads the provided match.
 """
 
 import argparse
@@ -78,9 +70,8 @@ VARIANTS = {
                            and n not in learn_features.GROUP_GAP],
 }
 FEATURE_VERSION = 4   # bump when learn_features.build changes
-# Existing caches keep their version: the columns the frozen variants use have not changed, and
-# their models (v2, v3 from `full`; v4 from `full2`) were trained from those caches. A variant
-# that needs the newer columns (`dead`) needs these entries raised and the caches rebuilt.
+# old caches keep their version (the frozen models were trained on them); raise
+# these + rebuild if you want the `dead` variant
 CACHE_VERSION = {"full": 2, "full2": 3}
 
 
@@ -119,33 +110,24 @@ def game_list():
 
 # -- model ---------------------------------------------------------------------------------------
 
-# Training-set variants that emphasise frames near a true change of state (within CHANGE_NEAR
-# frames). spellF1 is decided at the changes, but they are a small share of all frames.
-#   name -> (feature variant, weight on near-change frames, keep every near-change frame,
-#            noise condition of the training and evaluation data)
+# training variants: name -> (features, near-change weight, dense near changes,
+# noise[, training noise if different])
 TRAINING = {
     "touch_w3": ("touch", 3.0, False, "full"),     # every 5th frame, near-change frames x3
     "touch_dense": ("touch", 1.0, True, "full"),   # every near-change frame, every 5th elsewhere
     # Noise condition full2: ball visibility follows player speed as on the real match.
     "touch_f2": ("touch", 1.0, False, "full2"),    # the v3 features on the new data
     "gap_f2": ("gap", 1.0, False, "full2"),        # plus ball-gap and stoppage cues
-    # The v3 recipe (trained on full), held-out games scored on full2: the honest reference for
-    # the two variants above. A fifth entry is the training condition when it differs.
+    # v3 recipe trained on full, scored on full2 - fair reference for the two above
     "touch_x2": ("touch", 1.0, False, "full2", "full"),
     # Possession-balanced training on the v4 data (see BALANCE below).
     "touch_f2_bal": ("touch", 1.0, False, "full2"),
     "touch_f2_bal15": ("touch", 1.0, False, "full2"),
 }
 
-# Possession-balanced training. spellF1 counts every possession once, however long it is, but
-# per-frame training counts a 20 s possession twenty times more than a 1 s one, and the model
-# learns to ignore short possessions (on the external games it favours the right team on 37% of
-# the frames of possessions under 1.5 s and on 51% for 1.5-3 s; docs/ablation.md). Here every
-# possession shorter than `ref` seconds carries the same total weight as one of `ref` seconds:
-# all of its frames are kept and each weighs ref / (SUBSAMPLE * its length). Longer possessions
-# and dead ball are unchanged (every SUBSAMPLE-th frame, weight 1). Possessions shorter than
-# `floor` seconds are left unweighted: they may be too brief to be seen in the tracking at all.
-#   name -> (ref in s, floor in s)
+# possession-balanced training: possessions shorter than ref s are kept whole and
+# weighted so each one counts like a ref-second one. didn't help (docs/ablation.md)
+#   name -> (ref s, floor s)
 BALANCE = {"touch_f2_bal": (8.0, 0.0), "touch_f2_bal15": (8.0, 1.5)}
 FPS = 25.0
 
@@ -224,9 +206,7 @@ def fit(X, y, rounds=NUM_ROUNDS, num_class=3, weight=None):
 
 
 # -- change-point model ---------------------------------------------------------------------------
-# A second model answers "does the state change here, and how?" It never decides a label. Its
-# output only makes the decoder's transitions cheaper or dearer frame by frame
-# (decode.viterbi_batch_dyn).
+# second model: does the state change here? only nudges the decoder costs
 CHANGE_HALF_WIDTH = 5     # frames either side of a true change that count as "change here"
 CHANGE_NEAR = 25          # every frame this close to a change is kept for training
 CHANGE_CLASSES = ("none", "switch", "die", "restart")
@@ -478,8 +458,7 @@ def final_model(variant="touch", with_change=False, version="v3"):
     if w is None:
         prior = np.bincount(y, minlength=3)[:3].astype(float) / len(y)
     else:
-        # emphasised sampling distorts the class shares; use the true shares of all graded
-        # frames (made symmetric in H and A, as the mirrored training copy is)
+        # weighted sampling skews the class shares -> use the true ones (H/A symmetric)
         prior = np.bincount(np.concatenate([d["gt"][d["graded"] & (d["gt"] != pm.X)]
                                             for d in train_sets]), minlength=3)[:3].astype(float)
         prior = (prior + prior[[1, 0, 2]]) / 2.0

@@ -1,12 +1,7 @@
-"""Data bundle -> per-frame labels -> submission CSV.
+"""Data bundle -> labels -> CSV.
 
-    parse ATD -> kickoff detection (halves.py)
-              -> features -> emissions (rules v1) -> Viterbi per half -> boundary refinement
-              -> graded-frame policy (X outside the halves, D before each kickoff)
-
-``method="baseline"`` swaps in the ported upstream baseline (nearest player, +/-50-frame vote) and is
-the reference every external comparison is made against. The contract around either method (row
-count, X on ungraded frames only, LF line endings, deterministic bytes) is checked before writing.
+parse -> kickoffs -> features -> emissions -> Viterbi per half -> X/D policy -> write.
+Everything goes through check_labels() before writing (row count, X only on ungraded frames).
 """
 
 import hashlib

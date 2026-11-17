@@ -1,10 +1,4 @@
-"""Write a match from arrays into our exact ATD bundle format (used by the external converters).
-
-Input arrays are in NORMALISED pitch coordinates (0-1, like the real ATD), NaN for missing. Speed
-(m/s, the real ``s`` unit) is computed from positions. The layout matches the real bundle and
-synthetic.py: ``<out>/tactical/<stem>_atd.txt`` + ``_atd.xml``, plus ``gt.csv``,
-``game_spec.json`` and ``truth.json``.
-"""
+"""Write tracking arrays back out in the exact ATD text + XML format (for external games)."""
 
 import json
 from pathlib import Path

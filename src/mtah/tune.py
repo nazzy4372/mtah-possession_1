@@ -1,24 +1,12 @@
-"""Tuning (M5): Optuna over the decoding parameters, on external games only.
+"""Optuna over the decoder settings, on external games only.
 
-    python tasks.py tune [--variant all] [--trials 80]
+    python tasks.py tune [--variant all] [--trials 60]
 
-What is tuned, and on what:
-  * search space: the decoder's three transition costs, the emission temperature, a dead-ball
-    bias added to log p(D), and whether to refine boundaries;
-  * data: the LEAVE-ONE-GAME-OUT predictions of the learned model (ext/train.py logo), so every
-    game is scored by a model that never saw it, under the real-calibrated `full` noise;
-  * objective: mean spellF1 over the games, from upstream possession_metrics.evaluate (imported,
-    never reimplemented);
-  * sampler: seeded TPE. Trials are asked in rounds of ROUND and decoded together in one batched
-    Viterbi pass (decode.viterbi_batch, identical paths to the single decoder);
-  * the frozen parameters are the median of the top 10 trials (majority vote for the yes/no
-    refine setting), not the single best: robustness over overfitting.
+Tunes the three transition costs, emission temperature, a dead-ball bias and refine on/off,
+using leave-one-game-out predictions. Objective = mean official spellF1. Seeded TPE; we freeze
+the median of the top 10 trials rather than the single best.
 
-Honest estimate: a nested 2-fold split (each fold mixes Metrica and SkillCorner games). Tune on one
-fold, take the median of its top 10, score the other fold; then swap. The nested score is the
-number to quote; the final tuning on all 13 games is what gets frozen.
-
-The provided match is never touched; the public 5-minute window is never used.
+The number to quote is the nested 2-fold score (tune on one half of the games, score the other).
 """
 
 import json

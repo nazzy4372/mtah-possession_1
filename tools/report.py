@@ -1,8 +1,4 @@
-"""Aggregate sanity numbers for a submission CSV (no ground truth needed).
-
-Prints counts and durations only, so its output on the real-match submission is safe to share.
-Possessions are counted exactly as the official scorer counts them: X forward-filled within each
-graded half (``pm.fill_abstentions``), then maximal H or A runs (``pm.possession_spells``).
+"""Aggregate sanity numbers for a submission CSV, plus the alarms. No ground truth needed.
 
     .venv\\Scripts\\python.exe tools\\report.py outputs\\real\\submission.csv
 """

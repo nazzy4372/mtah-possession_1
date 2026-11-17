@@ -1,13 +1,7 @@
-"""Viterbi decoding over {H, A, D}, run separately per graded half.
+"""Viterbi over {H, A, D} per half.
 
-The metric ranks whole possessions, so the decoder's job is to stop flicker without merging.
-Transitions are priced in log units: switching team (H <-> A) costs ``c_switch``; the ball dying
-(alive -> D) costs ``c_die``; a restart (D -> alive) costs ``c_restart``. A change is made only when
-the evidence for it, summed over the frames it covers, outweighs the cost. That is the
-"controlled possession" rule: a touch or a deflection does not flip possession, a sustained change
-does.
-
-Pre-kickoff frames inside a half are forced to D (the kickoff is detected in halves.py).
+Switching team costs c_switch, alive -> dead costs c_die, dead -> alive costs c_restart.
+The batched version gives identical paths, it's just faster for tuning.
 """
 
 from dataclasses import dataclass

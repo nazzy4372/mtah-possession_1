@@ -1,12 +1,7 @@
-"""Does a submission respect the Smart Tagging set pieces? Label-free aggregates only.
+"""Does a submission line up with the Smart Tagging? Label-free.
 
-Every tagged set piece (throw-in, corner, goal kick, free kick, kickoff after a goal) is a restart,
-so the ball must have been dead just before it (upstream DATA.md). This tool measures, with no
-ground truth, how often our labels already have a dead-ball run ending at each tagged set piece,
-how far apart the two restart times are, and how our team calls sit inside each tagged phase.
-
-Nothing is changed by it. It prints counts, shares and percentiles only, never a frame number or a
-position, so its output on the real match is safe to share.
+Checks there's a dead ball before each tagged set piece, and how our team calls sit inside the
+tagged phases. Aggregates only.
 
     .venv\\Scripts\\python.exe tools\\tagging_stats.py --data-dir C:\\Hackathon\\mtah-data
 """

@@ -1,25 +1,10 @@
-"""SkillCorner open data (A-League 2024/25 broadcast tracking) -> our ATD bundle format + H/A/D.
+"""SkillCorner open data (10 A-League matches) -> our ATD bundle + H/A/D labels.
 
-    python -m ext.skillcorner              # every downloaded match -> ext_cache/bundles/sc_<id>/
+    python -m ext.skillcorner
 
-Source and terms: see ext/download.py (MIT licence; credit SkillCorner). Label derivation:
-docs/label_derivation.md. Summary:
-
-Labels (checked on match 1874553 before trusting them, see the doc):
-  * possession.group (home / away / None) is SkillCorner's per-frame team possession. It persists
-    while no player has the ball, as our definition requires;
-  * a None frame OUTSIDE every phase of play (phases_of_play.csv) is dead ball. Those frames come in
-    long runs (median 17 s), with the ball off the pitch 16% of the time, against 0.4% when a
-    team has it;
-  * a None frame INSIDE a phase is a loose ball (runs with a median of 0.8 s). It stays with the
-    last team, or the phase's team if there is none yet.
-
-Resampling: 10 fps -> 25 fps. Positions are linearly interpolated between neighbouring samples
-where both exist; labels take the most recent sample. Coordinates (metres, origin at the centre, y
-up) are normalised to the ATD convention (0-1, origin top-left) with the match's own pitch size.
-Positions SkillCorner extrapolated (is_detected = False, mostly off-camera) are kept: they stand in
-for the whole-pitch view of the tactical camera. The ATD noise model is applied on top
-(ext/augment.py).
+possession.group gives H/A. No possession outside any phase of play = dead; inside a phase =
+loose ball, stays with the last team. 10 fps -> 25 fps by linear interpolation.
+See docs/label_derivation.md.
 """
 
 import csv

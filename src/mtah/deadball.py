@@ -1,28 +1,12 @@
-"""Dead-ball evidence from a collective slowdown of the players.
+"""Dead-ball evidence from players slowing down together. Evidence only - never writes a label.
 
-When play stops, everybody slows down within a second or three. This module turns that into
-EVIDENCE for the dead-ball state: a per-frame score that is added to the dead-ball emission and
-then weighed by the decoder against everything else. It never writes a label.
+Mean of the top 7 player speeds vs its own 10 s baseline; a drop to <= 0.6 for 1 s+ is a
+candidate. Dropped if the ball is in a penalty area or the arc (keeper holding it), or if there's
+no second cue (ball out / at rest / missing, or a tagged set piece nearby). The start is pulled
+back to a line crossing, ball stop or the ball vanishing; the end is the restart.
 
-1. Signal. Per frame, the mean of the `top_n` highest player speeds (speeds from positions,
-   clipped at `max_speed_ms` against tracker jumps), smoothed with a centred rolling median. Its
-   baseline is the rolling median over the previous `baseline_s` seconds, leaving out the most
-   recent `baseline_skip_s`. A slowdown candidate is a run of at least `min_slow_s` seconds with
-   smoothed / baseline <= `ratio_max`.
-2. Exclusion. A candidate whose ball is inside either penalty area or its arc is dropped: a
-   goalkeeper holding the ball, or a slow build-up near the box, slows everyone down while the
-   ball is alive. The ball position is the tracked one, or the last one seen within
-   `last_seen_s`; if it is older than that, the candidate is kept at lower confidence.
-3. Timing. Players slow after the ball goes dead, so the dead stretch starts earlier: the search
-   goes back up to `back_search_s` for the ball crossing a pitch line, then a sharp ball stop,
-   then the ball disappearing. It ends at the restart: the ball moving off after resting, or the
-   top speeds recovering to `recover_ratio` of the baseline at the onset.
-4. Guard. Slow build-up also lowers speeds, so a candidate only counts with one more cue: ball
-   outside the pitch, ball at rest for `still_min_s`, ball missing for `missing_min_s`, or a
-   tagged set piece starting within `tag_window_s`.
-
-Every number in DeadballParams is a HYPOTHESIS, to be tuned on external games only, never on the
-provided match or its public ground truth.
+Not used in the submission - it lowered spellF1 on the external games (docs/ablation.md).
+All the numbers live in DeadballParams.
 """
 
 from dataclasses import dataclass, field

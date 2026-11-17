@@ -1,18 +1,9 @@
-"""How does the ball behave when play is slow? Label-free aggregates, for the dead-ball noise model.
+"""What does the ball do when the players are slow? Label-free.
 
-A stoppage shows up in the tracking as slow players. This tool bins graded frames by how slow the
-players are (rank of the median player speed within its half) and reports, per bin, what the ball
-is doing: tracked or not, at rest or moving, next to a player or not, on or off the pitch. It also
-looks at sudden slow-downs (a whistle) and at where the ball was last seen before each long gap
-(a ball kicked out disappears near a line).
-
-No labels are used for the main tables, so the same script runs on the real match (by the human)
-and on external games, and the two can be compared directly. With an external game it adds the
-same numbers split by the true state (dead / alive), which shows how well the augmented dead ball
-imitates the real slow-play frames. Shares and percentiles only; no positions, no frame numbers.
+Bins frames by player-speed rank within the half and shows, per bin, whether the ball is tracked,
+at rest, near a player, off the pitch. Works on the real match and on external games.
 
     .venv\\Scripts\\python.exe tools\\slow_play_stats.py --data-dir C:\\Hackathon\\mtah-data
-    python tools/slow_play_stats.py --external metrica_g1 --condition full
 """
 
 import argparse

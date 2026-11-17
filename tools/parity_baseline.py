@@ -1,14 +1,4 @@
-"""Parser correctness check against the upstream reference, without any ground truth.
-
-Runs upstream ``starter/baseline.py``'s own line-by-line reader (``nearest_player_labels``) and our
-fast numpy parser + vectorised nearest player on the same bundle, and compares the per-frame team
-codes. Identical on every frame means our parsing, slot order, team assignment, metre conversion
-and frame indexing agree exactly with upstream.
-
-Prints one aggregate line per check, nothing frame-level, so the output is safe to share.
-
-    .venv\\Scripts\\python.exe tools\\parity_baseline.py --data-dir C:\\Hackathon\\mtah-data
-"""
+"""Check our reader + nearest-player codes against the upstream baseline. Prints one line."""
 
 import argparse
 import os

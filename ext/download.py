@@ -1,15 +1,4 @@
-"""Download external open datasets into ext_cache/ (gitignored), verified against a manifest.
-
-    python -m ext.download metrica
-
-Metrica Sports sample data, https://github.com/metrica-sports/sample-data (anonymised games 1-3).
-Terms (README of that repository): no formal licence; "be responsible with the use of this data"
-and "if you use it for anything public, please acknowledge the source". Acknowledged in
-docs/label_derivation.md and docs/TECHNICAL.md.
-
-The files are pinned to a commit and checked by SHA-256, so a rerun reproduces the same inputs.
-They are data only (CSV / JSON / XML / text), parsed, never executed.
-"""
+"""Download Metrica + SkillCorner open data at pinned commits, checked against SHA-256 manifests."""
 
 import hashlib
 import json

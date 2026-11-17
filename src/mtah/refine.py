@@ -1,13 +1,5 @@
-"""Boundary snapping after decoding: move each transition to the physical event that caused it.
-
-The decoder places boundaries where the accumulated evidence tips over, which lags the real event.
-spellF1 is sensitive to timing (8 frames costs about 0.1), so each boundary may move inside a
-small window to:
-  * H <-> A: the first frame a player of the new team is within ``r_m`` of the ball and nearer
-    than the old team;
-  * alive -> D: the first frame the ball is outside the pitch;
-  * D -> alive: the first frame the ball moves faster than ``kick_ms`` (the restart kick).
-A boundary never moves past its neighbours, and nothing moves when no such frame exists.
+"""Boundary snapping (move an H<->A change to the first touch of the new team nearby).
+Only the v1 rules use it; it made the learned models worse.
 """
 
 from dataclasses import dataclass

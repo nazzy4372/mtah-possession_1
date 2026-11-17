@@ -1,23 +1,15 @@
-"""Every command in this project, cross-platform (there is no make on Windows).
+"""All project commands (no make on Windows).
 
-    python tasks.py test [--fast]                     unit + end-to-end tests (--fast skips the
-                                                      full-length synthetic match)
-    python tasks.py submission [--data-dir D] [--out F] [--spec S]
-                                                      data bundle -> submission CSV
-    python tasks.py validate [F]                      official validator + LF check + SHA-256
-    python tasks.py report [F] [--spec S]             aggregate sanity numbers for a submission
-    python tasks.py package --team NAME [F]           <team>.csv + <team>.md for upload, validated
-    python tasks.py synthetic [--out D] [--preset small|full] [--seed N]
-                                                      write a synthetic bundle in ATD format
-    python tasks.py external [--prepare] [--games NAME ...]
-                                                      (--prepare: download + convert Metrica and
-                                                      SkillCorner) and score baseline vs v1 under
-                                                      clean / balldrop / full noise
-    python tasks.py tune                              (M5) Optuna on external games
+    python tasks.py test [--fast]
+    python tasks.py submission [--data-dir D] [--out F] [--method v5|v4|...]
+    python tasks.py validate [F]
+    python tasks.py report [F]
+    python tasks.py package --team NAME
+    python tasks.py synthetic [--preset small|full]
+    python tasks.py external [--prepare]
+    python tasks.py tune
 
---data-dir defaults to the MTAH_DATA_DIR environment variable. Output defaults to
-outputs/real/submission.csv, which is gitignored: per-frame outputs on the real match never enter
-git.
+--data-dir defaults to MTAH_DATA_DIR. Output goes to outputs/real/ (gitignored).
 """
 
 import argparse

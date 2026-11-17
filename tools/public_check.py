@@ -1,15 +1,6 @@
-"""Correctness check against the PUBLIC 5-minute ground truth. Run once, after freezing.
+"""Score a submission on the public 5-minute window (correctness check, logged every time).
 
-The public window is a correctness check only (CLAUDE.md hard rule 3; upstream RULES.md): it shows
-that frames are aligned, the file is well-formed and the labels mean what we think. It is never
-used for training, tuning or choosing between variants. Every look is logged in
-docs/public_window_log.md.
-
-Runs the official scorer (upstream/evaluation/run_evaluation.py) on one submission, with every
-output redirected to outputs/real/public_check/ (gitignored) so nothing is written into the
-upstream submodule, and prints the ranked board only (aggregates over the 5-minute window).
-
-    .venv\\Scripts\\python.exe tools\\public_check.py
+    .venv\\Scripts\\python.exe tools\\public_check.py [--detail] [--force]
 """
 
 import argparse

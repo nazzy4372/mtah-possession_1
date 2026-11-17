@@ -1,47 +1,15 @@
-"""Graded-frame policy and algorithmic kickoff detection (CLAUDE.md hard rule 7).
+"""Kickoff detection and the X / pre-kickoff D policy.
 
-The published half blocks say which frames are graded, but not when the ball is first kicked. For
-BAR-ATH the second half is graded about two minutes before its kickoff, and every frame in between
-is dead ball. The kickoff is found here from the tracking alone and is never hard-coded.
+We look for the kickoff line-up rather than the ball, since the ball is rarely tracked while it
+sits on the centre spot. Each frame is OK (both teams in their own half), VIOLATED, or UNKNOWN
+(too few players tracked to tell). The kickoff is where the first line-up of >= MIN_FORMATION_S
+breaks, sharpened with the ball if we can see it near the spot.
 
-The signal is the kickoff FORMATION, not the ball. On the real match the ball is almost never
-tracked while it rests on the centre spot; it is picked up once it moves. The players, though, stand
-in their own halves before every kickoff and leave them within about a second of it. In open play
-both teams almost never stand fully in their own halves for seconds at a time.
+Special cases: data starting mid line-up, and "live start" (players already running when the
+tracking begins, seen on Metrica game 1).
 
-Per frame, the formation is in one of three states:
-  OK        both teams have >= MIN_PLAYERS tracked, >= OWN_HALF_SHARE of each (ignoring the kicker
-            area and anyone within HALFWAY_TOL_M of the halfway line) in its own half, and the
-            two teams on opposite sides;
-  VIOLATED  both teams tracked well enough, and the condition fails;
-  UNKNOWN   a team has too few tracked players to tell. This is common around a restart, while the
-            camera or the tracker has not caught up. It never ends a formation by itself.
-
-A formation run starts at an OK frame and ends at the first VIOLATED frame that is followed by
-VIOLATION_S with no OK frame. Short flickers and UNKNOWN stretches do not end it. The kickoff is
-the end of the pre-kickoff line-up: the first run of at least MIN_FORMATION_S in the search window.
-Its end is the first frame the formation has broken.
-
-Refinement with the ball, inside the REFINE_S before the formation breaks:
-  * a rest on the spot (the ball stays within MOVE_M of its median for MIN_REST_S, within
-    CENTRE_RADIUS_M of the spot): the kickoff is the frame after the ball was last seen at rest;
-  * else the first frame the ball is seen within NEAR_SPOT_M of the spot;
-  * else the break itself.
-
-When tracking begins at the block start (within 1 s, after DATA_START_S with none):
-  * a formation already in place when the data begins counts as the line-up whatever its length
-    (the data began during the line-up);
-  * live-start: no formation, and players already running (median speed >= LIVE_SPEED_MS over
-    LIVE_WINDOW_S). Tracking began after the kick, so the kickoff is the block start. Seen on
-    external game 1 (2.4 m/s against 0-0.4 m/s at the five line-up starts). Players walking out
-    before a second half are slow, so they do not trigger it.
-fallback: nothing found, so the published block start is used, flagged, with aggregate
-diagnostics.
-
-Consistency (the assertion of rule 7): the kickoff must lie inside the search window. When the game
-publishes kickoff anchors (BAR-ATH's games.py does), it must also lie within ANCHOR_TOL_S of the
-anchor. The anchor checks the detector and never sets a label. A kickoff that fails the check is
-marked inconsistent, and pipeline.run refuses to write a file.
+The published anchors are only used to check the result (within ANCHOR_TOL_S). If the check
+fails the pipeline refuses to write a file.
 """
 
 import warnings

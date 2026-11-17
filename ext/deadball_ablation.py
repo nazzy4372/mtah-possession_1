@@ -1,19 +1,8 @@
-"""Ablation of the slowdown dead-ball evidence (src/mtah/deadball.py) on the external games.
-
-For each game (noise condition full2, evaluation copy) it scores, with the official metric:
-
-  rules v1                       the hand-written emissions and decoder, no detector
-  v1 + detector                  deadball evidence added to the dead-ball emission
-  v1 + detector, no box rule     the same without the penalty-area exclusion
-  v1 + detector, no cue guard    the same without the extra-cue requirement
-  v4                             the learned model (leave-one-game-out), frozen settings
-  v4 + detector (weight w)       the evidence added to v4's dead-ball score before decoding
-  detector alone                 score > 0 against true dead ball (precision and recall only)
-
-Columns: dead-ball precision and recall by frame, alive/dead F1 and spellF1. The external
-tagging stand-in has no set pieces, so the tag cue never fires here.
+"""Does the slowdown detector (src/mtah/deadball.py) help? Ablation on the 13 external games.
 
     python -m ext.deadball_ablation [--games N]
+
+Short answer: no (docs/ablation.md).
 """
 
 import argparse

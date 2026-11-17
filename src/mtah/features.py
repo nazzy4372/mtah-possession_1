@@ -1,11 +1,7 @@
-"""Per-frame, identity-free features from a Tracking (metres, m/s, NaN-safe).
+"""Per-frame features in metres and m/s, NaN-safe, no player identities.
 
-Slots are tracklets, not people, so every feature is collective: per-team minima, medians and
-centroids over whatever slots are tracked on a frame. Nothing follows a slot through time.
-
-Ball: on the real match the ball is missing on 41% of graded frames, in long gaps (median about
-11 s). Gaps of up to BALL_INTERP_S are linearly interpolated (and flagged); longer gaps leave the
-ball unknown, and the team call then rests on shape and on who touched the ball last.
+Ball gaps up to BALL_INTERP_S are interpolated; longer ones leave the ball unknown and the team
+call leans on shape + last touch instead.
 """
 
 import warnings

@@ -1,16 +1,4 @@
-"""Label-free distributions of the model's own features, for checking the domain gap.
-
-Prints percentiles and shares over graded frames, never per-frame values. The same script runs on
-the real match (by the human) and on external games (clean or augmented), so the two can be
-compared directly. It needs no labels.
-
-    .venv\\Scripts\\python.exe tools\\feature_stats.py --data-dir C:\\Hackathon\\mtah-data
-    python tools/feature_stats.py --external metrica_g1 --condition full
-
-Reported: median player speed (the main dead-ball cue), ball speed, nearest-player distance to the
-ball, proximity margin, ball outside the pitch, shape difference, last-touch coverage, and the v1
-emission outputs: the share of frames the rules call dead, and how decisive the team call is.
-"""
+"""Feature distributions, real match vs external games (domain gap check). Aggregates only."""
 
 import argparse
 import os

@@ -1,16 +1,7 @@
-"""Model v4: the v3 features, trained on external games with the corrected ball-visibility noise.
+"""Model v4: same 59 features as v3, retrained on the newer noise (`full2`), where the ball goes
+untracked mostly in slow play, like on the real match.
 
-Same 59 features and the same LightGBM settings as v3 (emission_v3.py). The only difference is the
-training data: noise condition `full2` (ext/augment.py, ball model "speed"), in which the ball goes
-untracked mostly while the players are slow, as measured on the real match without labels
-(tools/slow_play_stats.py). Under the older condition `full` the dropout ignored the state of play.
-
-  models/emission_v4.txt   p(H, A, D | x), trained by `python -m ext.train final-v4`
-  config/final_v4.yaml     decoding settings, frozen by `python tasks.py tune --variant touch_f2
-                           --freeze`
-
-Inference is single-threaded and deterministic. v2 and v3 are left untouched, so the earlier frozen
-files stay reproducible with `--method v2` and `--method v3`.
+models/emission_v4.txt + config/final_v4.yaml. Single-threaded, deterministic.
 """
 
 import json

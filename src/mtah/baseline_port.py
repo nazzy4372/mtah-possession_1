@@ -1,13 +1,5 @@
-"""M1 placeholder labeller: the upstream baseline, vectorised over our parsed arrays.
-
-Replaced by real emissions and the semi-Markov decoder in M2. It exists so that the pipeline
-produces a genuine, valid file end to end, and so that tests/test_parity.py can prove that our
-parser and frame indexing agree exactly with upstream ``starter/baseline.py``.
-
-Upstream semantics preserved exactly: distances in metres from normalised coordinates times the
-pitch size, nearest tracked player wins, ties go to the lowest slot index (strict ``<`` there,
-first ``argmin`` here), and a frame with no ball has no answer. Smoothing is upstream's own
-``baseline.smooth``, imported rather than copied.
+"""Vectorised port of the upstream baseline (nearest player + 50-frame vote).
+Same tie-breaking as upstream, so the codes match exactly - see tests/test_parity.py.
 """
 
 import numpy as np

@@ -1,9 +1,4 @@
-"""Compare two submission CSVs in aggregate (no ground truth involved).
-
-A label-free correctness check when the model changes: a new version should agree with the old one
-on most graded frames and differ mainly near changes of state. Prints frame agreement, the 3x3
-table of label counts (file A by file B) and possession counts. Aggregates only, so the output on
-the real match is safe to share.
+"""Compare two submission CSVs without ground truth: agreement, 3x3 table, possession counts.
 
     .venv\\Scripts\\python.exe tools\\compare_submissions.py OLD.csv NEW.csv
 """

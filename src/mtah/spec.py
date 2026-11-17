@@ -1,13 +1,4 @@
-"""GameSpec: everything the pipeline needs to know about a match besides its data files.
-
-The real match (BAR-ATH) takes every value from upstream ``games.py``, the published contract.
-Synthetic and external games carry the same fields in a ``game_spec.json``, so one pipeline runs on
-all of them unchanged.
-
-``halves`` are the graded blocks as inclusive video-frame ranges ``(half, first, last)``. For the
-real match they are published boundaries, not answers (DATA.md), and they are the only frame
-numbers this project uses.
-"""
+"""GameSpec: frames, fps, pitch size and graded half blocks for one game."""
 
 import json
 from dataclasses import asdict, dataclass

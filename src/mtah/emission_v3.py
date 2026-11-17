@@ -1,17 +1,7 @@
-"""Model v3: v2 plus change-of-possession evidence (post-M5 improvement).
+"""Model v3: v2 features + touch sequence around each frame.
 
-A LightGBM model trained only on noise-augmented external games (ext/train.py):
-  models/emission_v3.txt  p(H, A, D | x) on the v2 features plus touch-sequence and ball-kinematics
-                          features around the frame (learn_features.GROUP_TOUCH)
-Decoding settings are frozen in config/final_v3.yaml (written by `python tasks.py tune --freeze`).
-
-Not shipped: a change-point model (models/change_v3.txt, p(no change, switch, die, restart | x))
-that modulates the decoder's transition costs (decode.viterbi_batch_dyn). Its gain on external
-games was not robust (docs/ablation.md), so the frozen config has no `change` block and the
-model is neither loaded nor present. The code path is kept and tested as a documented experiment.
-
-Inference is single-threaded and deterministic. v2 (emission_v2.py, config/final.yaml) is left
-untouched so the earlier frozen submission stays reproducible with `--method v2`.
+models/emission_v3.txt, settings in config/final_v3.yaml. Kept so the v3 file still rebuilds.
+The change-point code path is still here but switched off (didn't help reliably).
 """
 
 import json

@@ -1,14 +1,4 @@
-"""Explain kickoff detection on a bundle.
-
-For each half: which method fired, the offset from the published block start, and the check against
-the published bounds and anchors. Then counts and run lengths of the conditions the detector uses,
-in three windows relative to the published block start (the 10 s before, the first 10 s, and the
-whole search window). These are aggregates only.
-
-With --runs it also lists the formation runs in the search window (start, end and length in seconds
-from the published block start, how each ended, and its share of UNKNOWN frames). Those are event
-timings inside the kickoff window, of the same kind as the kickoff offset itself, and include no
-positions. Leave the flag off if that is more detail than you want to share.
+"""Why did kickoff detection pick what it picked? Aggregates per half.
 
     .venv\\Scripts\\python.exe tools\\kickoff_diag.py --data-dir C:\\Hackathon\\mtah-data [--runs]
 """

@@ -1,27 +1,10 @@
-"""Minimal synthetic match in the exact ATD bundle format.
+"""Small synthetic match in the exact ATD bundle format.
 
-Purpose: test file format, plumbing, kickoff detection and determinism. NOT football realism --
-realistic training and tuning data comes from external games in M3. The model is deliberately
-simple:
+For testing the format, plumbing, kickoff detection and determinism - not football. Possessions
+of random length, ball-outs with a few seconds of dead ball, players drifting around formation
+spots, a kickoff line-up per half, and some light corruption (ball dropout, slot hopping).
 
-  * possession runs with a random team and a log-normal length; each ends in a turnover or a
-    ball-out, which gives a dead ball of 3-10 s and a restart by a random team;
-  * 22 players on formation anchors plus slow random drift; the team in possession pushes up;
-  * the ball follows a "carrier" of the team in possession, which changes every few seconds;
-  * the kickoff shape before each half's kickoff: ball at rest on the centre spot, each team in
-    its own half;
-  * light corruption: bursty ball dropout (~40%), players hopping between tracklet slots of their
-    team's pool, short player dropouts.
-
-Bundle written (same layout as the real data):
-    <out>/tactical/<stem>_atd.txt, <stem>_atd.xml, <stem>_smart_tagging.xml
-    <out>/gt.csv          frame,label ground truth (X outside the graded halves)
-    <out>/game_spec.json  GameSpec
-    <out>/truth.json      kickoff frames and other generator facts for tests
-
-Two presets. ``small``: about 4 minutes with its own GameSpec. ``full``: the BAR-ATH layout
-(199,319 frames, the published half blocks); it simulates a few minutes per half and fills the rest
-of each half by cycling the simulated post-kickoff frames, which keeps generation to seconds.
+Presets: "small" (~4 min) and "full" (BAR-ATH layout, 199,319 frames, cycled to keep it fast).
 """
 
 import json
@@ -68,8 +51,7 @@ def preset(name: str) -> Tuple[GameSpec, List[HalfPlan]]:
     if name == "full":
         spec = GameSpec.from_upstream("BAR-ATH")
         (h1, a1, b1), (h2, a2, b2) = spec.halves
-        # Half 1 is graded from its kickoff. Half 2 kicks off at the published anchor, so this
-        # bundle also passes the pipeline's anchor check (the anchor sets no label anywhere).
+        # half 2 kicks off at the published anchor, so the anchor check passes
         k2 = dict(spec.kickoff_anchors)[h2]
         plans = [HalfPlan(h1, a1, b1, kickoff=a1, kick_team=0, sim_frames=180 * FPS),
                  HalfPlan(h2, a2, b2, kickoff=k2, kick_team=1, sim_frames=180 * FPS)]
@@ -135,8 +117,7 @@ def simulate_half(plan: HalfPlan, rng: np.random.Generator) -> HalfSim:
     # player motion: anchors + possession push + AR(1) drift
     anchors = np.concatenate([_anchors(0, plan.half), _anchors(1, plan.half)])   # (22, 2)
     direction = np.array([1.0 if (k < 11) == (plan.half == 1) else -1.0 for k in range(22)])
-    # During a stoppage the teams keep the shape of the last possession; they do not walk back
-    # into kickoff formation (which real teams only do for a kickoff).
+    # in a stoppage teams keep their shape (only a kickoff resets formation)
     shape_team = in_poss.copy()
     for i in range(n_pre + 1, m):
         if shape_team[i] < 0:

@@ -1,30 +1,11 @@
-"""A Smart-Tagging-like stream for the SkillCorner games, and the test of a tagging team prior.
+"""SkillCorner phases of play written out as a Smart-Tagging-like file, to test the v5 tag prior.
 
-The provided match comes with Metrica's automatic Smart Tagging: phases of play with a team. No
-other game has that exact stream, but SkillCorner's open data has its own automatic phases of play
-(`<id>_phases_of_play.csv`) with the same kind of content:
+    python -m ext.tags write | experiment | freeze
 
-    SkillCorner phase type      written as (Smart Tagging code)
-    build_up                    BUILD UP
-    create                      PROGRESSION
-    finish                      CREATING CHANCES
-    transition, quick_break     ATTACKING TRANSITION
-    direct                      LONG BALL            (not used as team evidence, as on the real match)
-    chaotic, set_play           not written
-
-`write_tagging` writes them as a SportsCode XML next to each SkillCorner bundle, in the layout of
-the real file, so `mtah.io_tagging` reads external and real tags through the same code.
-
-CAVEAT, and what is done about it. SkillCorner's phases come from the same possession model as
-our SkillCorner labels, so they are cleaner than an independent tagger would be. They are
-therefore degraded before use (`degrade`): each boundary is moved by about a second, a share of
-the phases is dropped to match the real coverage, and a share is given to the wrong team. The
-weight of the prior is chosen to be safe under the pessimistic settings, not best under the clean
-one. Dead-ball labels are untouched by the prior (they were derived from the phases, so any use
-there would be circular).
-
-    python -m ext.tags write          write the tagging XML for every SkillCorner bundle
-    python -m ext.tags experiment     spellF1 on the SkillCorner games by weight and tag quality
+build_up -> BUILD UP, create -> PROGRESSION, finish -> CREATING CHANCES, transition/quick_break
+-> ATTACKING TRANSITION. These phases are cleaner than a real tagger, so we make them worse
+first (shifted boundaries, dropped phases, wrong team) and pick a weight that never loses.
+Only the team call is tested; dead ball would be circular here.
 """
 
 import argparse
@@ -49,10 +30,8 @@ CODE_OF = {"build_up": "BUILD UP", "create": "PROGRESSION", "finish": "CREATING 
            "direct": "LONG BALL"}
 OUT = ROOT / "outputs" / "external"
 
-# Tag quality scenarios: (boundary jitter sd in s, share of phases dropped, share given to the
-# wrong team). "real-like" matches the real stream's label-free aggregates (tools/tagging_stats.py
-# on the real match: about two thirds of our alive frames are covered; tags are "accurate to about
-# a second", upstream starter/load_smart_tagging.py). The others make the tags worse.
+# tag quality: (boundary jitter s, share of phases dropped, share given to wrong team).
+# real-like ~ what tools/tagging_stats.py shows on the real match
 SCENARIOS = (("clean", 0.0, 0.0, 0.0), ("real-like", 1.0, 0.22, 0.0),
              ("10% wrong team", 1.0, 0.22, 0.10), ("20% wrong team", 1.0, 0.22, 0.20),
              ("30% wrong team", 1.0, 0.22, 0.30))
@@ -218,9 +197,7 @@ def experiment(verbose=True):
     return result
 
 
-# Scenarios the real stream can be in, judged without labels: on the real match our tag-free
-# labels agree with the tagging evidence about as often as under "real-like" to "10% wrong team"
-# here, and far more often than under the 20% and 30% scenarios (tools/tagging_stats.py).
+# plausible = about where our real-match agreement with the tags sits
 PLAUSIBLE = ("clean", "real-like", "10% wrong team")
 
 

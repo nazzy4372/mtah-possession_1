@@ -1,15 +1,8 @@
-"""Model v5: model v4 plus a team prior from the match's Smart Tagging.
+"""Model v5 = v4 + a small team prior from the match's Smart Tagging. This is the submission.
 
-v5 uses the v4 LightGBM model and v4's frozen decoder settings unchanged (emission_v4.py,
-config/final_v4.yaml). The only addition: on frames that the tagging places inside a phase of
-settled possession for one team (BUILD UP, PROGRESSION, CREATING CHANCES, ATTACKING TRANSITION),
-the other team's log-score is lowered by `weight` nats per frame before decoding
-(io_tagging.team_evidence, io_tagging.add_team_prior). The dead-ball score is never touched.
-
-The weight is frozen in config/final_v5.yaml by `python -m ext.tags freeze`. It was chosen on
-SkillCorner games only, whose automatic phases of play stand in for the tagging, degraded to be
-no better than the real stream (ext/tags.py, docs/ablation.md). Nothing from the provided match's
-labels or public ground truth was used.
+Inside a BUILD UP / PROGRESSION / CREATING CHANCES / ATTACKING TRANSITION phase of one team,
+the other team's score drops by `weight` per frame. Dead ball isn't touched.
+Weight is in config/final_v5.yaml, set on SkillCorner games (see ext/tags.py).
 """
 
 from functools import lru_cache

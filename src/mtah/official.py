@@ -1,13 +1,4 @@
-"""The official upstream code, imported in one place.
-
-The upstream repository is a git submodule at ``upstream/`` and is never modified. Its modules are
-written as scripts that expect their own folders on ``sys.path``, so this is the only module in the
-project that touches ``sys.path``. Everything else imports from here:
-
-    from mtah.official import pm, games, baseline
-
-``pm`` is ``evaluation/possession_metrics.py``: the metric is imported, never reimplemented.
-"""
+"""The one place that touches sys.path: imports the upstream metric, games.py and baseline."""
 
 import sys
 from pathlib import Path

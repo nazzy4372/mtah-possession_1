@@ -1,14 +1,5 @@
-"""Emission model v2: LightGBM trained on noise-augmented external games (ext/train.py).
-
-The model files are shipped in the repository (models/), trained only on other games' data:
-  models/emission_v2.txt   LightGBM text model (stored byte-exact, see .gitattributes)
-  models/emission_v2.json  feature list, class prior, training provenance
-Decoding settings are frozen in config/final.yaml (written by `python tasks.py tune`): decoder
-costs, emission temperature, dead-ball bias, refinement on/off. Without that file the model's own
-defaults from emission_v2.json are used.
-
-Inference is single-threaded and deterministic. The output is log p(x | state) up to a constant:
-the temperature-scaled log posterior minus the log class prior, plus the dead-ball bias on D.
+"""Model v2: LightGBM on 39 features (models/emission_v2.txt, config/final.yaml).
+Kept so the earlier file still rebuilds with --method v2.
 """
 
 import json

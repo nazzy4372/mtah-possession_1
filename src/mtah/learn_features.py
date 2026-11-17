@@ -1,22 +1,11 @@
-"""Feature matrix for the learned emission model (v2): per frame, identity-free, team-swappable.
+"""Feature matrix for the learned models. Per frame, no player identities, H/A swappable.
 
-Built on features.Features plus a few counts. Design rules, from the M3 domain-gap check
-(tools/feature_stats.py, real match vs external games):
-  * player speed enters only RELATIVE to its own half (rank and robust z-score). The real match
-    and Metrica share a speed scale but SkillCorner does not, so an absolute threshold would not
-    transfer between sources;
-  * ball missingness. Models v2 and v3 have no missingness feature and were trained on data in
-    which missingness carried almost no dead-ball signal. That rested on a wrong reading of the
-    real match. A label-free check (tools/slow_play_stats.py) shows the real ball is tracked on
-    9% of the slowest frames and 83% of the fastest half, so a gap is strong evidence of a
-    stoppage. GROUP_GAP adds explicit gap features for models trained on data with the same
-    visibility pattern (ext/augment.py, ball model "speed");
-  * every home/away pair can be swapped (see SWAP) so training can mirror H <-> A, which removes
-    any home bias and doubles the data.
+- player speed only enters relative to its own half (SkillCorner runs on a different speed
+  scale from Metrica and the real match)
+- every home/away pair can be swapped, so training mirrors H <-> A
+- rolling windows of +-0.5/1/2/5 s, plus 2 s look-back/look-ahead (offline, so we can)
 
-Rolling windows (centred unless named otherwise) give the model context: +/-0.5, 1, 2 and 5 s,
-plus a 2 s look-back and look-ahead for the speed signal (offline labelling, so the future is
-available).
+GROUP_GAP and GROUP_DEADBALL are newer feature groups that no shipped model uses.
 """
 
 import warnings
@@ -127,11 +116,8 @@ def build(tracking, spec, F=None):
         cols["line_dist_x"] = np.minimum(bx, length - bx)           # to the nearest goal line
         cols["centre_dist"] = np.hypot(bx - length / 2.0, by - width / 2.0)
 
-    # --- ball gap and stoppage cues (GROUP_GAP). On the real match the ball goes untracked mostly
-    # while play is slow (tools/slow_play_stats.py), so a gap is itself evidence of a stoppage:
-    # the ball is kicked out or play is whistled dead, tracking loses it, and it reappears at the
-    # restart. These features are only valid with training data whose ball visibility follows
-    # player speed in the same way (ext/augment.py, ball model "speed").
+    # --- ball gaps (GROUP_GAP). the real ball goes missing mostly when play is slow,
+    # so only use these with the "speed" ball model in training
     known = F.ball_known
     frame = np.arange(n)
     last_known = np.maximum.accumulate(np.where(known, frame, -1))
@@ -176,8 +162,7 @@ def build(tracking, spec, F=None):
     cols["touch_signed"] = F.last_touch * fade
     cols["since_touch"] = np.clip(np.where(np.isfinite(F.since_touch_s), F.since_touch_s, 120), 0, 120)
 
-    # --- touch sequence around the frame (GROUP_TOUCH): who is on the ball before and after.
-    # A change of possession is a change in this sequence, so the model sees both sides of it.
+    # --- touch sequence (GROUP_TOUCH): who's on the ball just before / after
     dh = np.nan_to_num(F.d_home, nan=np.inf)
     da = np.nan_to_num(F.d_away, nan=np.inf)
     touch = {"home": ((dh < feat.TOUCH_M) & (dh + feat.TOUCH_MARGIN_M < da)).astype(float),
@@ -263,13 +248,11 @@ SIGNED = ("margin", "margin_m05", "margin_m1", "margin_m3", "touch_signed", "sha
 GROUP_GAP = ("gap_len", "gap_elapsed", "gap_remaining", "last_seen_line", "next_seen_line",
              "rank_at_last_seen", "known_share_m5", "ps_drop3", "since_out")
 
-# The intermediate signals of the slowdown detector (deadball.FEATURES). No shipped model uses
-# them; they are kept out of every frozen feature set.
+# slowdown detector signals - no shipped model uses them
 GROUP_DEADBALL = ("db_ratio", "db_candidate", "db_box", "db_cue_out", "db_cue_still",
                   "db_cue_missing", "db_score")
 
-# Added after M5 (change-of-possession evidence). Kept as a group so the frozen M4 feature set
-# ("all") stays reproducible.
+# added after M5. separate group so the v2 feature set still rebuilds
 GROUP_TOUCH = ("touch_home_past1", "touch_away_past1", "touch_home_next1", "touch_away_next1",
                "touch_home_past3", "touch_away_past3", "touch_home_next3", "touch_away_next3",
                "since_home", "since_away", "until_home", "until_away", "touch_delta1",

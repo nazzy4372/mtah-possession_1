@@ -1,28 +1,12 @@
-"""Corrupt external tracking to look like the real ATD, calibrated on label-free real aggregates.
+"""Make clean external tracking look like the real ATD.
 
-Targets are the graded-frame aggregates of the real match (tools/real_stats.py, run by the human):
+Targets come from label-free aggregates of the real match (tools/real_stats.py,
+tools/slow_play_stats.py): ~41% ball missing in long gaps, ~20.5 players tracked, tracklets
+chopped across 46 slots, some duplicate tracks.
 
-  ball      40.7% missing, in 150 long gaps (median ~11 s); loss hazard 0.0014/frame with <= 1
-            player within 3 m, 0.0024 with 2, 0.0041 with 3+
-  players   20.5 tracked per frame on average; about 5% of frames with 13 or fewer, 2.4% with 23-25
-  tracklets 11.5 per minute in total, median length 888 frames (35 s), long tail to minutes
-  slots     46 slots split between the teams (24 / 22 on the real file)
-  duplicates 3.5% of frames have a same-team pair of tracks within 0.5 m
-
-Pipeline of corruptions, each deterministic for a seed:
-  1. view loss: episodes in which only players inside a band of the pitch around the play are
-     tracked (gives the low-count tail);
-  2. player dropouts: per-player gaps of 1-10 s;
-  3. fragmentation: every observed run of a player becomes one or more tracklets (random cuts),
-     each written to a free slot of its team's pool, so slot != person;
-  4. duplicates: short episodes in which a second slot shadows a player;
-  5. position jitter;
-  6. ball dropout, independent of the true state. On the real match the ball goes missing mostly
-     in live play, so a model must not learn "no ball = dead ball", which the Metrica data would
-     teach.
-
-``full(tracking, seed)`` returns a NEW Tracking with 46 slots. ``ball_dropout`` alone is the M2
-condition, kept for comparison.
+Steps: view loss, player dropouts, fragmentation into slots, duplicates, jitter, ball dropout.
+Ball model "v1" drops the ball at random (old, `full`); "speed" drops it mostly when players are
+slow, calibrated per speed bin (`full2`, what v4/v5 use).
 """
 
 from dataclasses import dataclass, replace
@@ -51,21 +35,15 @@ class AugmentParams:
     duplicate_s: tuple = (1.0, 5.0)
     duplicate_offset_m: float = 0.6
     jitter_m: float = 0.0              # clean external tracking already matches the real step size
-    # Share of each dead stretch with a resting ball restored. 1.0 gives P(ball missing | dead)
-    # 0.34-0.35 and P(missing | alive) 0.40-0.43 on Metrica, against about 0.34 / 0.45 estimated for
-    # the real match, so missingness carries almost no dead-ball signal, as on the real match.
+    # share of each dead stretch where we put a ball back (Metrica blanks it)
     dead_ball_fill: float = 1.0
     restart_jitter_m: float = 0.1
-    # Ball visibility model. "v1" (conditions `balldrop`, `full`; models v2 and v3): dropout
-    # independent of the state of play, dead ball restored as a resting ball. "speed" (condition
-    # `full2`): visibility calibrated to player speed as measured on the real match, and a
-    # restored dead ball is carried by the player who restarts. See calibrated_dropout.
+    # "v1": random ball dropout (full; v2, v3)
+    # "speed": dropout follows player speed, like the real match (full2; v4, v5)
     ball_model: str = "v1"
 
 
-# Real match, graded frames, label-free (tools/slow_play_stats.py): share of frames with the ball
-# tracked, by rank of the median player speed within the half. The ball goes untracked mostly
-# while play is slow, i.e. during stoppages.
+# real match, label-free: share of frames with the ball tracked, by player-speed rank
 RANK_EDGES = (0.10, 0.25, 0.50)
 KNOWN_TARGET = (0.086, 0.298, 0.507, 0.827)
 GAP_MIN_FRAMES = (75, 200)                         # a gap lasts at least this long (real: few short gaps)

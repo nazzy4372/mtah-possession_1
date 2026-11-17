@@ -1,26 +1,10 @@
-"""Metrica Sports open sample games 1-3 -> our ATD bundle format + H/A/D ground truth.
+"""Metrica open sample games 1-3 -> our ATD bundle + H/A/D labels.
 
-    python -m ext.metrica            # converts every game into ext_cache/bundles/metrica_g<N>/
+    python -m ext.metrica
 
-Source and terms: see ext/download.py. Label derivation: docs/label_derivation.md (summary below).
-
-Timeline. The Metrica frames of each period are placed on a synthetic "video" timeline laid out like
-the real match: PRE_PAD untracked frames, period 1, HALFTIME untracked frames, period 2, POST_PAD.
-The graded halves are the two periods, so the pipeline sees the same structure as on BAR-ATH.
-Games 1-2 start tracking at the kickoff (like the real first half); game 3 tracks before its kickoff
-(like the real second half).
-
-Labels from the human-annotated event data (who has the ball, when the ball is dead):
-  * a restart (any SET PIECE, or a PASS whose subtype is GOAL KICK) makes the ball alive, with the
-    restarting team in possession, from its start frame;
-  * a controlling event (PASS, CARRY, SHOT, RECOVERY, BALL LOST) by team T at its start frame gives
-    T the ball if it did not have it (possession changes on the new team's first controlled
-    action; a CHALLENGE never changes possession: contested balls stay with the last team);
-  * a stoppage makes the ball dead: BALL OUT (from its end frame, when the ball crosses the line);
-    a SHOT whose subtype contains OUT or GOAL (from its end frame); FAULT RECEIVED and HAND BALL
-    (from the start frame); OFFSIDE and END HALF (from the end frame). Dead lasts until the next
-    restart, or until the next controlling event if the restart was not annotated;
-  * before the first event of a period (the kickoff) the ball is dead.
+Labels from the event data: restarts and controlled actions give a team the ball, challenges
+don't change it, ball out / goal / foul / offside make it dead until the next restart.
+Full rules in docs/label_derivation.md.
 """
 
 import json

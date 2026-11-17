@@ -1,17 +1,7 @@
-"""Where does a submission disagree with the PUBLIC 5-minute ground truth? One row per segment.
+"""Per-segment diff of a submission against the PUBLIC 5-minute ground truth.
 
-Purpose: understanding what the organisers mean by "dead" and by "possession" (CHALLENGE.md: the
-public ground truth "shows frame by frame ... how these cases are labelled. Use it to understand
-what is expected"). It is NOT a tuning set: nothing may be fitted to these frames, and no rule may
-refer to them. Any change it suggests must be general and must be validated on external games.
-Every run is a look at the public window and is logged in docs/public_window_log.md.
-
-Prints, for each ground-truth segment in the window: its label, video time and length, how our
-labels split inside it, whether a possession was matched (best IoU with one of ours of the same
-team), and for dead-ball segments how much we covered and how early or late we were. With
---data-dir it adds label-free context per segment (share of frames with a known ball, median
-player speed, ball at rest, ball outside the pitch). Then the same from our side: each of our
-segments with the ground-truth labels inside it. No positions and no per-frame values.
+For understanding the organisers' definitions only - not for tuning. Every run counts as a look
+and goes in docs/public_window_log.md.
 
     .venv\\Scripts\\python.exe tools\\public_errors.py --data-dir C:\\Hackathon\\mtah-data
 """
